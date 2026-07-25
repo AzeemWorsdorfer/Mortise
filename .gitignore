@@ -3,9 +3,8 @@
 # Ticket 01 — project foundation.
 # ──────────────────────────────────────────────────────────────────────────
 
-# Internal docs (private, not for the repo)
-mortise-prd.md
-mortise-architecture.html
+# Internal docs and other private files (private, not for the repo)
+private/
 
 # OS
 .DS_Store

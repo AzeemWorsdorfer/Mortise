@@ -89,16 +89,14 @@ See `.husky/pre-commit` and `scripts/precommit-checks.mjs` for the full source.
 - `develop` — integration. Feature branches merge here via PR; protected on GitHub.
 - `feature/NN-short-slug` — single ticket's work. Lives at `feature/01-project-foundation` etc.
 
-See `docs/branch-protection.md` for the GitHub UI walkthrough to apply the
-protection rules.
+Protection rules are applied via `gh` CLI to both `main` and `develop`:
+PR required (1 approval), status checks (`go-lint`, `ts-lint`, `proto-check`),
+linear history, no force-push / deletion, no admin bypass.
 
 ## Documentation
 
 - `CONTEXT.md` — domain glossary
 - `docs/specs/01-core-agent-harness.md` — the foundational spec
-- `docs/branch-protection.md` — GitHub branch-protect walkthrough
-- `mortise-prd.md` — _(internal, not in repo)_
-- `mortise-architecture.html` — _(internal, not in repo)_
 - `AGENTS.md` — agent instructions for this repo
 
 ## Tickets
