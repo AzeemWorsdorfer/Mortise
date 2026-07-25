@@ -1,0 +1,50 @@
+# Internal docs (private, not for the repo)
+mortise-prd.md
+mortise-architecture.html
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Node / Bun
+node_modules/
+.opencode/node_modules/
+dist/
+build/
+coverage/
+*.log
+
+# Go
+# Daemon binary
+mortised
+mortised.exe
+*.exe
+# Test artifacts
+*.test
+*.out
+coverage.out
+coverage.html
+
+# Session data (per-user, never committed)
+.mortise/
+.mortise/sessions/
+
+# Proto tooling working files
+# Generated Go + TypeScript stubs ARE committed; tool working dirs are not.
+.buf/
+.protoc/
+
+# Env / secrets
+# Real secrets live in the OS keyring. .env files are local-only.
+.env
+.env.local
+.env.*.local
+# .env.example stays tracked so it can be the seed for `.env`
+!.env.example
