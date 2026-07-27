@@ -1,0 +1,35 @@
+#!/usr/bin/env sh
+# Mortise pre-commit hook.
+#
+# Runs in this order:
+#   1. Lint-staged: per-file formatting (auto-fix).
+#   2. Blocking checks: go vet, golangci-lint, tsc --noEmit.
+#   3. Repo-wide checks: secret scan, conflict markers, file size, proto regen.
+#
+# If any check fails, the commit is blocked.
+
+set -e
+
+# Pass GOBIN tools to the hook for the proto plugin checks.
+export PATH="$HOME/go/bin:$PATH"
+
+# 1. Lint-staged: per-file quick formatting.
+echo "==> lint-staged"
+npx --no-install lint-staged
+
+# 2. Go checks (project-wide, blocking).
+echo "==> go vet"
+(cd daemon && go vet ./...)
+
+echo "==> golangci-lint"
+(cd daemon && golangci-lint run)
+
+# 3. TypeScript type-check (project-wide, blocking).
+echo "==> tsc --noEmit"
+npm run ts:check
+
+# 4. Repo-wide checks.
+echo "==> repo-wide checks"
+node scripts/precommit-checks.mjs
+
+echo "==> pre-commit passed"
