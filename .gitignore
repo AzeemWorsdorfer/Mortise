@@ -30,6 +30,8 @@ yarn-debug.log*
 yarn-error.log*
 
 # Go (daemon lives in ./daemon)
+# Go binaries — generic Windows extension
+*.exe
 # Daemon binary — root output (if built via `go build .` from root)
 mortised
 mortised.exe

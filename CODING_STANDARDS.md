@@ -30,13 +30,14 @@ If a file describes itself as doing "X and also Y", split it.
 
 Hard limits:
 
-| Language | Max function / component | Max file |
-|----------|--------------------------|----------|
-| Go       | 50 lines                 | 500 lines |
-| TypeScript (non-component) | 50 lines | — |
-| TypeScript (component) | 200 lines | 300 lines |
+| Language                   | Max function / component | Max file  |
+| -------------------------- | ------------------------ | --------- |
+| Go                         | 50 lines                 | 500 lines |
+| TypeScript (non-component) | 50 lines                 | —         |
+| TypeScript (component)     | 200 lines                | 300 lines |
 
 Exceptions (no limit applies):
+
 - Generated code (`daemon/gen/`, `tui/src/gen/`, `**/*.gen.ts`)
 - Large constant / enum lookup tables
 - Test data fixtures
@@ -212,11 +213,11 @@ Never store a context in a struct.
 
 ### Tooling (enforced)
 
-| Tool | What it checks | When |
-|------|---------------|------|
-| `gofmt -s` | Formatting + simplification | pre-commit |
-| `go vet` | Static analysis | pre-commit |
-| `golangci-lint run` | Full lint suite | pre-commit + CI |
+| Tool                | What it checks              | When            |
+| ------------------- | --------------------------- | --------------- |
+| `gofmt -s`          | Formatting + simplification | pre-commit      |
+| `go vet`            | Static analysis             | pre-commit      |
+| `golangci-lint run` | Full lint suite             | pre-commit + CI |
 
 All enforced by `.husky/pre-commit` and `.github/workflows/ci.yml`.
 
@@ -246,14 +247,14 @@ Built on the project's strict `tsconfig.json`, ESLint, and Prettier configs.
 
 ### Naming
 
-| What | Convention | Example |
-|------|-----------|---------|
-| Component files | `kebab-case.tsx` | `trace-panel.tsx`, `session-header.tsx` |
-| Utility/hook/type files | `camelCase.ts` | `useSession.ts`, `formatDuration.ts` |
-| Components | PascalCase | `TracePanel`, `SessionHeader` |
-| Functions / hooks | camelCase | `useSession`, `formatDuration` |
-| Constants | UPPER_SNAKE_CASE | `MAX_RETRY_COUNT`, `DEFAULT_POLL_INTERVAL` |
-| Types / interfaces | PascalCase | `SessionData`, `PanelProps` |
+| What                    | Convention       | Example                                    |
+| ----------------------- | ---------------- | ------------------------------------------ |
+| Component files         | `kebab-case.tsx` | `trace-panel.tsx`, `session-header.tsx`    |
+| Utility/hook/type files | `camelCase.ts`   | `useSession.ts`, `formatDuration.ts`       |
+| Components              | PascalCase       | `TracePanel`, `SessionHeader`              |
+| Functions / hooks       | camelCase        | `useSession`, `formatDuration`             |
+| Constants               | UPPER_SNAKE_CASE | `MAX_RETRY_COUNT`, `DEFAULT_POLL_INTERVAL` |
+| Types / interfaces      | PascalCase       | `SessionData`, `PanelProps`                |
 
 ### Component structure
 
@@ -351,11 +352,11 @@ components, no class-based state management.
 
 ### Tooling (enforced)
 
-| Tool | What it checks | When |
-|------|---------------|------|
-| `prettier --check` | Formatting | pre-commit + CI |
-| `eslint --max-warnings 1` | Linting | pre-commit + CI |
-| `tsc --noEmit` | Type safety | pre-commit + CI |
+| Tool                      | What it checks | When            |
+| ------------------------- | -------------- | --------------- |
+| `prettier --check`        | Formatting     | pre-commit + CI |
+| `eslint --max-warnings 1` | Linting        | pre-commit + CI |
+| `tsc --noEmit`            | Type safety    | pre-commit + CI |
 
 All enforced by `.husky/pre-commit` and `.github/workflows/ci.yml`.
 
@@ -383,18 +384,19 @@ Every `.proto` file starts with a doc comment:
 
 ### Naming
 
-| What | Convention | Example |
-|------|-----------|---------|
-| Messages | PascalCase | `ServerEvent`, `ToolCallPending` |
-| Enums | PascalCase | `AgentPhase`, `RiskLevel` |
-| Fields | snake_case | `timestamp_ms`, `tool_name` |
-| Enum values | UPPER_SNAKE_CASE with type prefix | `PHASE_IDLE`, `RISK_SAFE` |
-| Services | PascalCase + `Service` suffix | `AgentService` |
-| RPC methods | PascalCase | `StreamEvents`, `SendCommand` |
+| What        | Convention                        | Example                          |
+| ----------- | --------------------------------- | -------------------------------- |
+| Messages    | PascalCase                        | `ServerEvent`, `ToolCallPending` |
+| Enums       | PascalCase                        | `AgentPhase`, `RiskLevel`        |
+| Fields      | snake_case                        | `timestamp_ms`, `tool_name`      |
+| Enum values | UPPER_SNAKE_CASE with type prefix | `PHASE_IDLE`, `RISK_SAFE`        |
+| Services    | PascalCase + `Service` suffix     | `AgentService`                   |
+| RPC methods | PascalCase                        | `StreamEvents`, `SendCommand`    |
 
 ### Organization
 
 Within a `.proto` file:
+
 1. Enums first
 2. Messages grouped by relationship (request/response pairs together)
 3. Services last
@@ -408,26 +410,26 @@ Within a `.proto` file:
 
 ### Tooling (enforced)
 
-| Tool | What it checks | When |
-|------|---------------|------|
-| `buf lint` | Schema validation | manual / CI |
-| `buf format -w` | Formatting | pre-commit (via lint-staged) |
-| `make proto-check` | Generated stubs are up-to-date | pre-commit + CI |
+| Tool               | What it checks                 | When                         |
+| ------------------ | ------------------------------ | ---------------------------- |
+| `buf lint`         | Schema validation              | manual / CI                  |
+| `buf format -w`    | Formatting                     | pre-commit (via lint-staged) |
+| `make proto-check` | Generated stubs are up-to-date | pre-commit + CI              |
 
 ---
 
 ## 5. Enforcement Summary
 
-| Rule | Go enforcement | TypeScript enforcement | When |
-|------|---------------|----------------------|------|
-| Formatting | `gofmt -s` | `prettier` | pre-commit |
-| Linting | `golangci-lint` | `eslint` | pre-commit + CI |
-| Type safety | `go vet` | `tsc --noEmit` | pre-commit + CI |
-| File size | PR review | PR review | PR review |
-| Function size | PR review | PR review | PR review |
-| Doc comments | PR review | PR review | PR review |
-| Proto staleness | `make proto-check` | `make proto-check` | pre-commit + CI |
-| Secret leaks | `scripts/precommit-checks.mjs` | `scripts/precommit-checks.mjs` | pre-commit |
+| Rule            | Go enforcement                 | TypeScript enforcement         | When            |
+| --------------- | ------------------------------ | ------------------------------ | --------------- |
+| Formatting      | `gofmt -s`                     | `prettier`                     | pre-commit      |
+| Linting         | `golangci-lint`                | `eslint`                       | pre-commit + CI |
+| Type safety     | `go vet`                       | `tsc --noEmit`                 | pre-commit + CI |
+| File size       | PR review                      | PR review                      | PR review       |
+| Function size   | PR review                      | PR review                      | PR review       |
+| Doc comments    | PR review                      | PR review                      | PR review       |
+| Proto staleness | `make proto-check`             | `make proto-check`             | pre-commit + CI |
+| Secret leaks    | `scripts/precommit-checks.mjs` | `scripts/precommit-checks.mjs` | pre-commit      |
 
 Automated checks run on every commit (`.husky/pre-commit`) and every push to
 `main` or `develop` (`.github/workflows/ci.yml`).

@@ -49,7 +49,7 @@
     ],
     "*.{ts,tsx,js,jsx}": [
       "prettier --write",
-      "eslint --fix --max-warnings 1"
+      "eslint --fix --max-warnings 0"
     ],
     "*.proto": [
       "buf format -w"
