@@ -14,6 +14,7 @@ concurrency:
 env:
   GO_VERSION: "1.22"
   NODE_VERSION: "20"
+  BUF_VERSION: "v1.72.0"
   PROTOC_GEN_GO_VERSION: "v1.36.1"
   PROTOC_GEN_CONNECT_GO_VERSION: "v1.17.0"
 
@@ -112,6 +113,9 @@ jobs:
 
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Install buf
+        run: go install github.com/bufbuild/buf/cmd/buf@${{ env.BUF_VERSION }}
 
       - name: Install Go proto plugins
         run: |
