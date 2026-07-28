@@ -48,9 +48,12 @@
     "*.go": [
       "cd daemon && gofmt -s -w"
     ],
-    "tui/src/**/*.{ts,tsx,js,jsx}": [
+    "tui/src/!(gen)/**/*.{ts,tsx,js,jsx}": [
       "prettier --write",
       "eslint --fix --max-warnings 0"
+    ],
+    "tui/src/gen/**/*.{ts,tsx,js,jsx}": [
+      "prettier --write"
     ],
     "daemon/**/*.go": [
       "cd daemon && gofmt -s -w"
