@@ -5,7 +5,7 @@
   "description": "Mortise — dark-timber agentic coding tool. Foundation workspace.",
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "proto": "buf generate",
