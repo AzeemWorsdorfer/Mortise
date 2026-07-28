@@ -1,12 +1,12 @@
 module github.com/AzeemWorsdorfer/Mortise/daemon
 
-go 1.25.0
+go 1.26.5
 
 require (
-	connectrpc.com/connect v1.17.0
+	connectrpc.com/connect v1.20.0
 	github.com/google/uuid v1.6.0
 	golang.org/x/net v0.23.0
-	google.golang.org/protobuf v1.36.1
+	google.golang.org/protobuf v1.36.11
 	modernc.org/sqlite v1.54.0
 )
 

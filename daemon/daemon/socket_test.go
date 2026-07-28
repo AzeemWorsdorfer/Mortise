@@ -17,7 +17,7 @@ func shortTempDir(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("MkdirTemp: %v", err)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(d) })
+	t.Cleanup(func() { _ = os.RemoveAll(d) }) //nolint:errcheck // test cleanup
 	return d
 }
 
@@ -29,7 +29,7 @@ func TestNewUnixListener_CreatesSocket(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newUnixListener: %v", err)
 	}
-	t.Cleanup(func() { _ = listener.Close() })
+	t.Cleanup(func() { _ = listener.Close() }) //nolint:errcheck // test cleanup
 
 	if _, err := os.Stat(sockPath); err != nil {
 		t.Errorf("socket file should exist at %q, stat err: %v", sockPath, err)
@@ -71,7 +71,7 @@ func TestNewUnixListener_ReplacesStaleSocketFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newUnixListener: %v", err)
 	}
-	t.Cleanup(func() { _ = listener.Close() })
+	t.Cleanup(func() { _ = listener.Close() }) //nolint:errcheck // test cleanup
 }
 
 func TestNewUnixListener_CreatesMissingParentDir(t *testing.T) {
@@ -84,7 +84,7 @@ func TestNewUnixListener_CreatesMissingParentDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newUnixListener: %v", err)
 	}
-	t.Cleanup(func() { _ = listener.Close() })
+	t.Cleanup(func() { _ = listener.Close() }) //nolint:errcheck // test cleanup
 
 	if _, err := os.Stat(sockPath); err != nil {
 		t.Errorf("expected socket file at %q, stat err: %v", sockPath, err)

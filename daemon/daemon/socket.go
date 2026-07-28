@@ -22,7 +22,7 @@ func newUnixListener(path string) (net.Listener, error) {
 	// Belt-and-suspenders: a previous daemon could have left the
 	// socket with overly-permissive mode. Lock it down.
 	if err := os.Chmod(path, 0o600); err != nil {
-		_ = listener.Close()
+		_ = listener.Close() //nolint:errcheck // cleanup after chmod failure
 		return nil, fmt.Errorf("unix listener: chmod %q: %w", path, err)
 	}
 	return listener, nil

@@ -14,9 +14,9 @@ help: ## Show this help.
 bootstrap: ## Install toolchain (buf, protoc plugins, golangci-lint, node deps).
 	@echo "==> Go: protoc-gen-go, protoc-gen-connect-go, golangci-lint"
 	@command -v buf         >/dev/null || GOBIN=$$(go env GOPATH)/bin go install github.com/bufbuild/buf/cmd/buf@v1.72.0
-	@command -v protoc-gen-go >/dev/null || GOBIN=$$(go env GOPATH)/bin go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.1
-	@command -v protoc-gen-connect-go >/dev/null || GOBIN=$$(go env GOPATH)/bin go install connectrpc.com/connect/cmd/protoc-gen-connect-go@v1.17.0
-	@command -v golangci-lint >/dev/null || GOBIN=$$(go env GOPATH)/bin go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.62.2
+	@command -v protoc-gen-go >/dev/null || GOBIN=$$(go env GOPATH)/bin go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
+	@command -v protoc-gen-connect-go >/dev/null || GOBIN=$$(go env GOPATH)/bin go install connectrpc.com/connect/cmd/protoc-gen-connect-go@v1.20.0
+	@command -v golangci-lint >/dev/null || GOBIN=$$(go env GOPATH)/bin go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
 	@command -v protoc       >/dev/null || (echo "protoc missing — install with: brew install protobuf" && exit 1)
 	@echo "==> Node deps via npm"
 	@npm install

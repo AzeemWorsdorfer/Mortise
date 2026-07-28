@@ -82,7 +82,7 @@ func TestMigrate_SessionsTableSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PRAGMA: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	cols := map[string]bool{}
 	for rows.Next() {

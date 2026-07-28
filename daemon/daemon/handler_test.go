@@ -215,12 +215,10 @@ var _ = h2c.NewHandler // keep import stable if a future test uses it directly.
 
 type countingWriter struct {
 	count *atomic.Int32
-	buf   []byte
 }
 
 func (w *countingWriter) Write(p []byte) (int, error) {
 	w.count.Add(1)
-	w.buf = append(w.buf, p...)
 	return len(p), nil
 }
 

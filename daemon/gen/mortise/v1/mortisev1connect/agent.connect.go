@@ -47,12 +47,6 @@ const (
 	AgentServiceConnectProcedure = "/mortise.v1.AgentService/Connect"
 )
 
-// These variables are the protoreflect.Descriptor objects for the RPCs defined in this package.
-var (
-	agentServiceServiceDescriptor       = v1.File_mortise_v1_agent_proto.Services().ByName("AgentService")
-	agentServiceConnectMethodDescriptor = agentServiceServiceDescriptor.Methods().ByName("Connect")
-)
-
 // AgentServiceClient is a client for the mortise.v1.AgentService service.
 type AgentServiceClient interface {
 	// Connect opens a bidirectional stream. The TUI sends ClientCommands
@@ -71,11 +65,12 @@ type AgentServiceClient interface {
 // http://api.acme.com or https://acme.com/grpc).
 func NewAgentServiceClient(httpClient connect.HTTPClient, baseURL string, opts ...connect.ClientOption) AgentServiceClient {
 	baseURL = strings.TrimRight(baseURL, "/")
+	agentServiceMethods := v1.File_mortise_v1_agent_proto.Services().ByName("AgentService").Methods()
 	return &agentServiceClient{
 		connect: connect.NewClient[v1.ClientCommand, v1.ServerEvent](
 			httpClient,
 			baseURL+AgentServiceConnectProcedure,
-			connect.WithSchema(agentServiceConnectMethodDescriptor),
+			connect.WithSchema(agentServiceMethods.ByName("Connect")),
 			connect.WithClientOptions(opts...),
 		),
 	}
@@ -106,10 +101,11 @@ type AgentServiceHandler interface {
 // By default, handlers support the Connect, gRPC, and gRPC-Web protocols with the binary Protobuf
 // and JSON codecs. They also support gzip compression.
 func NewAgentServiceHandler(svc AgentServiceHandler, opts ...connect.HandlerOption) (string, http.Handler) {
+	agentServiceMethods := v1.File_mortise_v1_agent_proto.Services().ByName("AgentService").Methods()
 	agentServiceConnectHandler := connect.NewBidiStreamHandler(
 		AgentServiceConnectProcedure,
 		svc.Connect,
-		connect.WithSchema(agentServiceConnectMethodDescriptor),
+		connect.WithSchema(agentServiceMethods.ByName("Connect")),
 		connect.WithHandlerOptions(opts...),
 	)
 	return "/mortise.v1.AgentService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

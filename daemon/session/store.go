@@ -54,13 +54,13 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if err := db.PingContext(pingCtx); err != nil {
-		_ = db.Close()
+		_ = db.Close() //nolint:errcheck // caller already has a failure reason
 		return nil, fmt.Errorf("session store: ping %q: %w", path, err)
 	}
 
 	s := &Store{db: db}
 	if err := s.Migrate(ctx); err != nil {
-		_ = db.Close()
+		_ = db.Close() //nolint:errcheck // caller already has a failure reason
 		return nil, fmt.Errorf("session store: migrate: %w", err)
 	}
 	return s, nil
