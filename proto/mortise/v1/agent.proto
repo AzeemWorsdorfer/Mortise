@@ -155,3 +155,17 @@ message RejectToolCall {
   string call_id = 1;
   string reason = 2;
 }
+
+// AgentService is the bidirectional control plane between the TUI client
+// and the Mortise daemon. The TUI opens one Connect stream per session;
+// the daemon sends ServerEvents as they are produced and receives
+// ClientCommands as the user interacts with the TUI.
+//
+// See: docs/specs/01-core-agent-harness.md §4.4, §5
+service AgentService {
+  // Connect opens a bidirectional stream. The TUI sends ClientCommands
+  // as the user issues them; the daemon responds with ServerEvents
+  // (SystemStatus on connect, then phase/think/text/tool events as
+  // the agent loop runs).
+  rpc Connect(stream ClientCommand) returns (stream ServerEvent) {}
+}
