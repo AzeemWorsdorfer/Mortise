@@ -33,12 +33,13 @@ yarn-error.log*
 # Go binaries — generic Windows extension
 *.exe
 # Daemon binary — root output (if built via `go build .` from root)
-mortised
-mortised.exe
+/mortised
+/mortised.exe
 # Daemon binary — daemon-local output
 daemon/mortised
 daemon/mortised.exe
 daemon/bin/
+/bin/
 # Test artifacts
 *.test
 *.out

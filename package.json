@@ -19,7 +19,8 @@
     "lint:go": "cd daemon && gofmt -s -l . && go vet ./... && golangci-lint run",
     "format:go": "cd daemon && gofmt -s -w .",
     "lint": "npm run lint:ts && npm run lint:go",
-    "test": "echo \"No tests yet — added in ticket 02\" && exit 0",
+    "test": "cd daemon && go test ./... -count=1",
+    "test:race": "cd daemon && go test ./... -count=1 -race",
     "prepare": "husky || true"
   },
   "devDependencies": {
@@ -47,9 +48,15 @@
     "*.go": [
       "cd daemon && gofmt -s -w"
     ],
-    "*.{ts,tsx,js,jsx}": [
+    "tui/src/**/*.{ts,tsx,js,jsx}": [
       "prettier --write",
       "eslint --fix --max-warnings 0"
+    ],
+    "daemon/**/*.go": [
+      "cd daemon && gofmt -s -w"
+    ],
+    "*.{ts,tsx,js,jsx}": [
+      "prettier --write"
     ],
     "*.proto": [
       "buf format -w"

@@ -30,6 +30,11 @@ proto-check: ## Verify generated stubs are up-to-date (CI gate).
 	@buf generate
 	@git diff --exit-code daemon/gen tui/src/gen
 
+.PHONY: build
+build: ## Compile the mortised Go binary into ./bin/mortised.
+	@mkdir -p bin
+	@cd daemon && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ../bin/mortised ./cmd/mortised
+
 .PHONY: lint
 lint: ## Run all linters (TS + Go).
 	@npm run lint
@@ -53,12 +58,12 @@ format-check: ## Verify formatting only (no edits).
 
 .PHONY: test
 test: ## Run all test suites.
-	@cd daemon && go test ./...
+	@cd daemon && go test ./... -count=1
 	@npm test
 
 .PHONY: ci
-ci: proto-check format-check lint test ## Full CI pipeline (used by GitHub Actions).
+ci: proto-check format-check lint test build ## Full CI pipeline (used by GitHub Actions).
 
 .PHONY: clean
-clean: ## Remove generated proto stubs.
-	@rm -rf daemon/gen tui/src/gen
+clean: ## Remove generated proto stubs and build artifacts.
+	@rm -rf daemon/gen tui/src/gen bin
