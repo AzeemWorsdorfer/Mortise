@@ -13,7 +13,7 @@
 /* eslint-disable */
 // @ts-nocheck
 
-import { ClientCommand, ServerEvent } from "./agent_pbjs";
+import { ClientCommand, ServerEvent } from "./agent_pb.js";
 import { MethodKind } from "@bufbuild/protobuf";
 
 /**

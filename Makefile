@@ -24,10 +24,13 @@ bootstrap: ## Install toolchain (buf, protoc plugins, golangci-lint, node deps).
 .PHONY: proto
 proto: ## Regenerate Go + TypeScript stubs from proto/*.proto.
 	@buf generate
+	@# Workaround for protoc-gen-connect-es import-extension bug (missing dot).
+	@sed -i.bak 's|from "./agent_pbjs"|from "./agent_pb.js"|g' tui/src/gen/mortise/v1/agent_connect.ts && rm -f tui/src/gen/mortise/v1/agent_connect.ts.bak
 
 .PHONY: proto-check
 proto-check: ## Verify generated stubs are up-to-date (CI gate).
 	@buf generate
+	@sed -i.bak 's|from "./agent_pbjs"|from "./agent_pb.js"|g' tui/src/gen/mortise/v1/agent_connect.ts && rm -f tui/src/gen/mortise/v1/agent_connect.ts.bak
 	@git diff --exit-code daemon/gen tui/src/gen
 
 .PHONY: build
