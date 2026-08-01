@@ -168,7 +168,7 @@ function checkProtoFresh() {
   // doesn't flag a spurious mismatch.
   try {
     execSync(
-      "sed -i '' 's|from \"./agent_pbjs\"|from \"./agent_pb.js\"|g' tui/src/gen/mortise/v1/agent_connect.ts",
+      "sed -i.bak 's|from \"./agent_pbjs\"|from \"./agent_pb.js\"|g' tui/src/gen/mortise/v1/agent_connect.ts && rm -f tui/src/gen/mortise/v1/agent_connect.ts.bak",
       { stdio: 'pipe' },
     );
   } catch (err) {
