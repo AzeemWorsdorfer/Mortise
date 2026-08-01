@@ -21,12 +21,16 @@
     "lint": "npm run lint:ts && npm run lint:go",
     "test": "cd daemon && go test ./... -count=1",
     "test:race": "cd daemon && go test ./... -count=1 -race",
+    "tui:dev": "tsx watch tui/src/main.tsx",
+    "tui:mock": "tsx tui/src/main.tsx --mock",
+    "tui:start": "tsx tui/src/main.tsx",
+    "tui:build": "tsc -p tui",
     "prepare": "husky || true"
   },
   "devDependencies": {
     "@bufbuild/buf": "1.72.0",
-    "@bufbuild/protoc-gen-es": "1.10.1",
     "@bufbuild/protobuf": "1.10.1",
+    "@bufbuild/protoc-gen-es": "1.10.1",
     "@connectrpc/protoc-gen-connect-es": "1.7.0",
     "@types/node": "^26.0.0",
     "@types/react": "19.2.17",
@@ -37,8 +41,10 @@
   },
   "dependencies": {
     "@connectrpc/connect": "1.7.0",
+    "@connectrpc/connect-node": "^1.7.0",
     "ink": "^7.0.0",
-    "react": "19.2.8"
+    "react": "19.2.8",
+    "tsx": "^4.23.1"
   },
   "lint-staged": {
     "*.go": [

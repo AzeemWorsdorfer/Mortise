@@ -1,5 +1,5 @@
 ---
-status: ready-for-agent
+status: completed
 blocked-by: ["01-project-foundation"]
 ---
 

@@ -163,6 +163,17 @@ function checkProtoFresh() {
   } catch (err) {
     return { ok: false, error: 'buf generate failed: ' + err.message };
   }
+  // Workaround for protoc-gen-connect-es bug: it generates `./agent_pbjs`
+  // (missing dot) instead of `./agent_pb.js`. We apply the fix so the diff
+  // doesn't flag a spurious mismatch.
+  try {
+    execSync(
+      "sed -i '' 's|from \"./agent_pbjs\"|from \"./agent_pb.js\"|g' tui/src/gen/mortise/v1/agent_connect.ts",
+      { stdio: 'pipe' },
+    );
+  } catch (err) {
+    return { ok: false, error: 'import fix failed: ' + err.message };
+  }
   try {
     execSync('git diff --exit-code -- daemon/gen tui/src/gen', { stdio: 'pipe' });
     return { ok: true };
