@@ -1,0 +1,171 @@
+// Mortise — Core Agent Harness protocol
+//
+// Canonical source for the daemon ↔ TUI wire format.
+// Generated stubs are committed to:
+//   - daemon/gen/mortise/v1/   (Go, via connect-go)
+//   - tui/src/gen/mortise/v1/  (TypeScript, via connect-es)
+//
+// Regenerate with: `make proto`
+// See: docs/specs/01-core-agent-harness.md §4.4
+
+syntax = "proto3";
+
+package mortise.v1;
+
+option go_package = "github.com/AzeemWorsdorfer/Mortise/daemon/gen/mortise/v1;mortisev1";
+
+// ServerEvent is the envelope for every daemon → client message.
+// Wraps a payload in the current AgentPhase context.
+message ServerEvent {
+  uint64 timestamp_ms = 1;
+  AgentPhase phase = 2;
+  int32 turn_number = 3;
+
+  oneof payload {
+    PhaseTransitionEvent phase_change = 10;
+    ThinkingChunk thinking = 11;
+    ToolCallPending tool_pending = 12;
+    ToolCallCompleted tool_completed = 13;
+    AgentText text = 14;
+    SystemStatus status = 15;
+    SessionSummary summary = 16;
+  }
+}
+
+enum AgentPhase {
+  PHASE_UNKNOWN = 0;
+  IDLE = 1;
+  PLANNING = 2;
+  ACTING = 3;
+  OBSERVING = 4;
+  DECIDING = 5;
+  PAUSED = 6;
+  COMPLETED = 7;
+  ERRORED = 8;
+}
+
+message PhaseTransitionEvent {
+  AgentPhase from = 1;
+  AgentPhase to = 2;
+  string reason = 3;
+}
+
+message ThinkingChunk {
+  string text = 1;
+}
+
+message AgentText {
+  string text = 1;
+}
+
+message ToolCallPending {
+  string call_id = 1;
+  string tool_name = 2;
+  string parameters_json = 3;
+  RiskLevel risk_level = 4;
+  bool requires_approval = 5;
+}
+
+enum RiskLevel {
+  RISK_UNKNOWN = 0;
+  SAFE = 1;
+  MODIFIES_FILES = 2;
+  DESTRUCTIVE = 3;
+}
+
+message ToolCallCompleted {
+  string call_id = 1;
+  string tool_name = 2;
+  bool success = 3;
+  string result_summary = 4;
+  int64 duration_ms = 5;
+  UsageDelta usage = 6;
+  string error_message = 7;
+}
+
+message UsageDelta {
+  int32 input_tokens = 1;
+  int32 output_tokens = 2;
+  int32 cache_tokens = 3;
+  double cost_usd = 4;
+}
+
+message SystemStatus {
+  string model_id = 1;
+  string provider_id = 2;
+  int32 connected_clients = 3;
+  int32 session_token_total = 4;
+  double session_cost_total = 5;
+  string session_id = 6;
+  string session_name = 7;
+  string workspace_path = 8;
+  string branch = 9;
+  int64 uptime_sec = 10;
+}
+
+message SessionSummary {
+  int32 total_turns = 1;
+  int32 total_tool_calls = 2;
+  int32 total_tokens = 3;
+  double total_cost = 4;
+  int64 duration_sec = 5;
+  int32 error_count = 6;
+}
+
+// ClientCommand is the client → daemon control message.
+// Used for pause, resume, cancel, provider switch, handoff, and tool approval.
+message ClientCommand {
+  oneof command {
+    PauseSession pause = 1;
+    ResumeSession resume = 2;
+    CancelTask cancel = 3;
+    SwitchProvider switch_provider = 4;
+    TriggerHandoff handoff = 5;
+    ApproveToolCall approve = 6;
+    RejectToolCall reject = 7;
+  }
+}
+
+message PauseSession {
+  string reason = 1;
+}
+
+message ResumeSession {
+  // Reserved: future options (e.g., resume from specific phase).
+}
+
+message CancelTask {
+  string reason = 1;
+}
+
+message SwitchProvider {
+  string provider_id = 1;
+  string model_id = 2;
+}
+
+message TriggerHandoff {
+  string reason = 1;
+}
+
+message ApproveToolCall {
+  string call_id = 1;
+}
+
+message RejectToolCall {
+  string call_id = 1;
+  string reason = 2;
+}
+
+// AgentService is the bidirectional control plane between the TUI client
+// and the Mortise daemon. The TUI opens one Connect stream per session;
+// the daemon sends ServerEvents as they are produced and receives
+// ClientCommands as the user interacts with the TUI.
+//
+// See: docs/specs/01-core-agent-harness.md §4.4, §5
+service AgentService {
+  // Connect opens a bidirectional stream. The TUI sends ClientCommands
+  // as the user issues them; the daemon responds with ServerEvents
+  // (SystemStatus on connect, then phase/think/text/tool events as
+  // the agent loop runs).
+  rpc Connect(stream ClientCommand) returns (stream ServerEvent) {}
+}

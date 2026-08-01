@@ -1,6 +1,10 @@
-# Internal docs (private, not for the repo)
-mortise-prd.md
-mortise-architecture.html
+# ──────────────────────────────────────────────────────────────────────────
+# Mortise .gitignore
+# Ticket 01 — project foundation.
+# ──────────────────────────────────────────────────────────────────────────
+
+# Internal docs and other private files (private, not for the repo)
+private/
 
 # OS
 .DS_Store
@@ -13,19 +17,29 @@ Thumbs.db
 *.swo
 *~
 
-# Node / Bun
+# Node / Bun (project root + any workspace)
 node_modules/
 .opencode/node_modules/
+.tui/node_modules/
 dist/
 build/
 coverage/
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
-# Go
-# Daemon binary
-mortised
-mortised.exe
+# Go (daemon lives in ./daemon)
+# Go binaries — generic Windows extension
 *.exe
+# Daemon binary — root output (if built via `go build .` from root)
+/mortised
+/mortised.exe
+# Daemon binary — daemon-local output
+daemon/mortised
+daemon/mortised.exe
+daemon/bin/
+/bin/
 # Test artifacts
 *.test
 *.out
@@ -37,9 +51,13 @@ coverage.html
 .mortise/sessions/
 
 # Proto tooling working files
-# Generated Go + TypeScript stubs ARE committed; tool working dirs are not.
+# Generated Go + TypeScript stubs ARE committed in daemon/gen/ and tui/src/gen/.
+# The buf working cache and protoc working dirs are not.
 .buf/
 .protoc/
+
+# Husky internal shims (the .husky/_/ dir is its own root)
+# (own .gitignore covers internals; this guards against future installs)
 
 # Env / secrets
 # Real secrets live in the OS keyring. .env files are local-only.

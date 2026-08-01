@@ -1,0 +1,10 @@
+dist
+node_modules
+package-lock.json
+**/*.gen.ts
+**/*.gen.tsx
+**/*.gen.js
+daemon/gen/
+tui/src/gen/
+proto/**/buf.lock
+**/*.proto

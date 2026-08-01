@@ -1,0 +1,129 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+# Cancel in-progress runs for the same branch on rapid pushes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: "1.26.5"
+  NODE_VERSION: "22"
+  BUF_VERSION: "v1.72.0"
+  PROTOC_GEN_GO_VERSION: "v1.36.11"
+  PROTOC_GEN_CONNECT_GO_VERSION: "v1.20.0"
+
+jobs:
+  # ────────────────────────────────────────────────────────────────────
+  # Go: format, vet, lint, test.
+  # Mirrors the pre-commit hook's Go checks so a green CI = a clean tree.
+  # ────────────────────────────────────────────────────────────────────
+  go-lint:
+    name: Go lint & test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: daemon/go.sum
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Install Go proto plugins
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@${{ env.PROTOC_GEN_GO_VERSION }}
+          go install connectrpc.com/connect/cmd/protoc-gen-connect-go@${{ env.PROTOC_GEN_CONNECT_GO_VERSION }}
+
+      - name: golangci-lint
+        run: |
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
+          golangci-lint run
+        working-directory: daemon
+
+      - name: gofmt
+        working-directory: daemon
+        run: |
+          test -z "$(gofmt -s -l .)" || (echo "gofmt -s found issues; run: gofmt -s -w ." && exit 1)
+
+      - name: go vet
+        working-directory: daemon
+        run: go vet ./...
+
+      - name: go test
+        working-directory: daemon
+        run: go test ./...
+
+  # ────────────────────────────────────────────────────────────────────
+  # TypeScript: format, type-check.
+  # ESLint is intentionally omitted: @typescript-eslint does not support
+  # TypeScript 7.x. Type-checking is handled by tsc --noEmit, and
+  # formatting by Prettier.
+  # ────────────────────────────────────────────────────────────────────
+  ts-lint:
+    name: TS lint & type-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install npm deps
+        run: npm ci
+
+      - name: prettier --check
+        run: npm run format:check
+
+      - name: tsc --noEmit
+        run: npm run ts:check
+
+  # ────────────────────────────────────────────────────────────────────
+  # Protobuf: regenerate stubs and verify the tree is clean.
+  # Delegate to `make proto-check` to stay in sync with the pre-commit hook.
+  # ────────────────────────────────────────────────────────────────────
+  proto-check:
+    name: Proto stubs up-to-date
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Install buf
+        run: go install github.com/bufbuild/buf/cmd/buf@${{ env.BUF_VERSION }}
+
+      - name: Install Go proto plugins
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@${{ env.PROTOC_GEN_GO_VERSION }}
+          go install connectrpc.com/connect/cmd/protoc-gen-connect-go@${{ env.PROTOC_GEN_CONNECT_GO_VERSION }}
+
+      - name: Install npm deps
+        run: npm ci
+
+      - name: Verify proto stubs
+        run: make proto-check
