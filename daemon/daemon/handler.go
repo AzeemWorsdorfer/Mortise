@@ -196,5 +196,3 @@ func safeString(d *Daemon, getter func(*Daemon) string) string {
 	}
 	return getter(d)
 }
-
-
