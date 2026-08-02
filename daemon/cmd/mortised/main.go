@@ -1,19 +1,22 @@
 // Command mortised is the Mortise daemon entry point.
 //
 // mortised reads and validates Mortise configuration files (project
-// + global), initializes the SQLite session store at ~/.mortise/mortise.db,
-// binds a Unix domain socket at ~/.mortise/mortise.sock, and serves the
-// Connect-RPC AgentService.Connect bidi stream.
+// + global), initializes the SQLite session store at
+// ~/.mortise/mortise.db, loads (or creates) the session row for the
+// current workspace, binds a Unix domain socket at
+// ~/.mortise/mortise.sock, and serves the Connect-RPC
+// AgentService.Connect bidi stream.
 //
-// In ticket 02 the daemon is intentionally narrow: no agent loop, no
-// tool execution. Its job is to prove the wire format, config loading,
-// SQLite bootstrap, and graceful shutdown all work end-to-end.
+// In ticket 04 the daemon loads the persistent session on startup so
+// the TUI sees real session identity in SystemStatus. The agent
+// loop, tool execution, and event bus are still future work.
 //
 // See: docs/specs/01-core-agent-harness.md §4.4, §5
 package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -23,6 +26,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/AzeemWorsdorfer/Mortise/daemon/config"
 	mortisedaemon "github.com/AzeemWorsdorfer/Mortise/daemon/daemon"
@@ -41,6 +45,17 @@ type runOptions struct {
 	socketPath string
 	mortiseDir string
 	logLevel   slog.Level
+}
+
+// daemonInputs groups the per-process values that buildDaemon needs
+// from run(): the loaded session, the persistence store, and the
+// model/provider identifiers. Grouped to keep buildDaemon's
+// signature under the 5-parameter rule.
+type daemonInputs struct {
+	store    *session.Store
+	sess     *session.Session
+	model    string
+	provider string
 }
 
 // parseFlags binds CLI flags onto a fresh runOptions. Defined as a
@@ -140,7 +155,7 @@ func main() {
 // the daemon without poking signals at the test process. When parent
 // is nil, run installs signal.NotifyContext for SIGINT/SIGTERM.
 func run(parent context.Context, opts runOptions, logger *slog.Logger) error {
-	if err := os.MkdirAll(opts.mortiseDir, 0o755); err != nil {
+	if err := os.MkdirAll(opts.mortiseDir, session.DefaultDirPerm); err != nil {
 		return fmt.Errorf("create mortise dir %q: %w", opts.mortiseDir, err)
 	}
 	if opts.socketPath == "" {
@@ -153,11 +168,17 @@ func run(parent context.Context, opts runOptions, logger *slog.Logger) error {
 	}
 	model, provider := resolveModel(cfg)
 
-	_, closeStore, err := openStore(opts, logger)
+	store, closeStore, err := openStore(opts, logger)
 	if err != nil {
 		return err
 	}
 	defer closeStore()
+
+	workspace := workspacePath()
+	sess, err := loadOrCreateSession(parent, store, workspace, cfg, logger)
+	if err != nil {
+		return err
+	}
 
 	listener, err := newListener(opts.socketPath)
 	if err != nil {
@@ -165,7 +186,12 @@ func run(parent context.Context, opts runOptions, logger *slog.Logger) error {
 	}
 	logger.Info("socket bound", "path", opts.socketPath)
 
-	d := buildDaemon(listener, opts, model, provider, logger)
+	d := buildDaemon(listener, opts, daemonInputs{
+		store:    store,
+		sess:     sess,
+		model:    model,
+		provider: provider,
+	}, logger)
 	ctx, stop := setupContext(parent)
 	defer stop()
 
@@ -209,8 +235,8 @@ func resolveModel(cfg *config.Config) (model, provider string) {
 	return model, provider
 }
 
-// openStore creates the SQLite session store and returns it along with
-// a close function the caller must defer.
+// openStore creates the SQLite session store and returns it along
+// with a close function the caller must defer.
 func openStore(opts runOptions, logger *slog.Logger) (*session.Store, func(), error) {
 	dbPath := filepath.Join(opts.mortiseDir, "mortise.db")
 	store, err := session.Open(context.Background(), dbPath)
@@ -225,23 +251,135 @@ func openStore(opts runOptions, logger *slog.Logger) (*session.Store, func(), er
 	return store, closeFn, nil
 }
 
-// buildDaemon constructs a daemon.Daemon from the listener and
-// resolved configuration.
-func buildDaemon(listener net.Listener, opts runOptions, model, provider string, logger *slog.Logger) *mortisedaemon.Daemon {
-	return &mortisedaemon.Daemon{
-		Listener:   listener,
-		SocketPath: opts.socketPath,
-		ModelID:    model,
-		ProviderID: provider,
-		Workspace:  workspacePath(),
-		Branch:     branchFor(workspacePath()),
-		Logger:     logger.With("component", "daemon"),
+// loadOrCreateSession resolves the session for the current workspace
+// from the SQLite store. If no row exists for the workspace-derived
+// ID, a new session is created in StatusRunning and persisted. If a
+// row exists, the session is transitioned to StatusRunning (when it
+// is not already running, e.g., crash recovery) and updated. A
+// session in the terminal StatusCompleted state is returned as-is —
+// the user has explicitly marked the session as done and re-running
+// the daemon should not silently revive it.
+//
+// This function is the bridge between the on-disk row and the
+// in-memory value the daemon hands to the handler.
+func loadOrCreateSession(
+	ctx context.Context,
+	store *session.Store,
+	workspace string,
+	cfg *config.Config,
+	logger *slog.Logger,
+) (*session.Session, error) {
+	id := session.NewSessionID(workspace)
+	sess, err := store.GetSession(ctx, id)
+	switch {
+	case err == nil:
+		// Already Running: nothing to do, just hand it back.
+		if sess.Status == session.StatusRunning {
+			logger.Info("session resumed",
+				"session_id", id,
+				"workspace", workspace,
+			)
+			return sess, nil
+		}
+		// Terminal: the user marked this session done. Do not try
+		// to revive it; the future handoff / restart-session flow
+		// (later ticket) will own that decision.
+		if sess.Status == session.StatusCompleted {
+			logger.Warn("session is completed; leaving as-is",
+				"session_id", id,
+				"workspace", workspace,
+			)
+			return sess, nil
+		}
+		// Paused / Errored / Crashed: bring it back to Running.
+		if terr := sess.Transition(session.StatusRunning); terr != nil {
+			return nil, fmt.Errorf("reopen session %q: %w", id, terr)
+		}
+		if uerr := store.UpdateSession(ctx, sess); uerr != nil {
+			return nil, fmt.Errorf("reopen session %q: persist: %w", id, uerr)
+		}
+		logger.Info("session reopened",
+			"session_id", id,
+			"workspace", workspace,
+			"prior_status", sess.Status.String(),
+		)
+		return sess, nil
+	case errors.Is(err, session.ErrSessionNotFound):
+		return createSession(ctx, store, id, workspace, cfg, logger)
+	default:
+		return nil, fmt.Errorf("load session %q: %w", id, err)
 	}
 }
 
-// setupContext returns a context that cancels when the caller's parent
-// context is canceled, or (for top-level production invocation) on
-// SIGINT/SIGTERM.
+// createSession constructs a fresh Session for workspace, transitions
+// it to Running, and persists the row.
+func createSession(
+	ctx context.Context,
+	store *session.Store,
+	id, workspace string,
+	cfg *config.Config,
+	logger *slog.Logger,
+) (*session.Session, error) {
+	now := time.Now().UTC().Truncate(time.Second)
+	sess := &session.Session{
+		ID:            id,
+		Name:          session.DefaultName(workspace),
+		Status:        session.StatusCreated,
+		WorkspacePath: workspace,
+		Branch:        branchFor(workspace),
+		TurnCount:     0,
+		CreatedAt:     now,
+		LastActiveAt:  now,
+		ConfigJSON:    serializeConfig(cfg),
+	}
+	if err := sess.Transition(session.StatusRunning); err != nil {
+		return nil, fmt.Errorf("activate new session: %w", err)
+	}
+	if err := store.CreateSession(ctx, sess); err != nil {
+		return nil, fmt.Errorf("persist new session: %w", err)
+	}
+	logger.Info("session created",
+		"session_id", id,
+		"workspace", workspace,
+		"name", sess.Name,
+	)
+	return sess, nil
+}
+
+// serializeConfig renders cfg as opaque JSON for storage in the
+// session row. The session package does not parse this value; the
+// daemon reads it back verbatim in a later ticket.
+func serializeConfig(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// buildDaemon constructs a daemon.Daemon from the listener, the
+// loaded session, the persistence store, and the resolved config.
+func buildDaemon(listener net.Listener, opts runOptions, in daemonInputs, logger *slog.Logger) *mortisedaemon.Daemon {
+	d := &mortisedaemon.Daemon{
+		Listener:   listener,
+		SocketPath: opts.socketPath,
+		ModelID:    in.model,
+		ProviderID: in.provider,
+		Workspace:  workspacePath(),
+		Branch:     branchFor(workspacePath()),
+		Logger:     logger.With("component", "daemon"),
+		Store:      in.store,
+	}
+	d.SetSession(in.sess)
+	return d
+}
+
+// setupContext returns a context that cancels when the caller's
+// parent context is canceled, or (for top-level production
+// invocation) on SIGINT/SIGTERM.
 func setupContext(parent context.Context) (context.Context, context.CancelFunc) {
 	if parent != nil && parent != context.Background() {
 		return context.WithCancel(parent)
