@@ -13,20 +13,21 @@ import (
 // ConnectHandler implements the mortise.v1.AgentService Connect bidi
 // stream method.
 //
-// In ticket 02, the handler's job is narrow:
-//   - Send a single SystemStatus event as soon as the stream opens.
+// In ticket 04 the handler's job is:
+//   - Read the daemon's current Session and send a SystemStatus
+//     event referencing its real ID and name.
 //   - Receive ClientCommands in a loop and log each one.
 //   - Hold the stream open until the client disconnects.
 //
 // The agent loop (turn planning, tool execution, etc.) is added in
-// ticket 03+ — at that point, this handler will also forward commands
-// into the loop and stream the loop's ServerEvents back to the client.
+// ticket 06+ — at that point, this handler will also forward
+// commands into the loop and stream the loop's ServerEvents back to
+// the client.
 type ConnectHandler struct {
 	daemon *Daemon
 	logger *slog.Logger
 
-	newID func() string
-	now   func() time.Time
+	now func() time.Time
 
 	connAdd  func()
 	connDrop func()
@@ -46,17 +47,17 @@ func (h *ConnectHandler) Connect(
 		}
 	}()
 
-	sessionID := h.newID()
+	sessionID := h.sessionIDForLog()
 	h.logger.Info("client connected", "session_id", sessionID)
 
-	if err := h.sendSystemStatus(stream, sessionID); err != nil {
+	if err := h.sendSystemStatus(stream); err != nil {
 		h.logger.Warn("send initial SystemStatus", "err", err, "session_id", sessionID)
 		return err
 	}
 
 	// Block reading commands until the client disconnects or the
 	// stream context is canceled. We log every command; acting on
-	// them is ticket 03+ work.
+	// them is ticket 06+ work.
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil
@@ -71,15 +72,37 @@ func (h *ConnectHandler) Connect(
 	}
 }
 
+// sessionIDForLog returns the daemon's current session ID for log
+// lines, or "<none>" when the daemon has not been wired to a session
+// (which should only happen in misconfigured tests).
+func (h *ConnectHandler) sessionIDForLog() string {
+	if h.daemon == nil {
+		return "<none>"
+	}
+	if sess := h.daemon.Session(); sess != nil {
+		return sess.ID
+	}
+	return "<none>"
+}
+
 // sendSystemStatus emits the initial SystemStatus event for a newly
-// connected client.
+// connected client. The session_id and session_name come from the
+// Daemon's current Session; if no session has been wired, they fall
+// back to empty strings so the TUI can detect "not ready" state.
 func (h *ConnectHandler) sendSystemStatus(
 	stream *connect.BidiStream[mortisev1.ClientCommand, mortisev1.ServerEvent],
-	sessionID string,
 ) error {
 	uptime := int64(0)
 	if h.daemon != nil {
 		uptime = int64(h.daemon.Uptime().Seconds())
+	}
+	var sessionID, sessionName string
+	if h.daemon != nil {
+		sess := h.daemon.Session()
+		if sess != nil {
+			sessionID = sess.ID
+			sessionName = sess.Name
+		}
 	}
 	ev := &mortisev1.ServerEvent{
 		TimestampMs: uint64(h.now().UnixMilli()),
@@ -93,7 +116,7 @@ func (h *ConnectHandler) sendSystemStatus(
 				SessionTokenTotal: 0,
 				SessionCostTotal:  0,
 				SessionId:         sessionID,
-				SessionName:       "untitled",
+				SessionName:       sessionName,
 				WorkspacePath:     safeString(h.daemon, func(d *Daemon) string { return d.Workspace }),
 				Branch:            safeString(h.daemon, func(d *Daemon) string { return d.Branch }),
 				UptimeSec:         uptime,

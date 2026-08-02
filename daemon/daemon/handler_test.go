@@ -1,7 +1,7 @@
 // Package daemon — handler_test.go exercises the Connect handler end to
 // end over a real Unix socket and a real Connect-RPC client. These are
-// the acceptance tests for ticket 02: the wire format is real, not
-// mocked.
+// the acceptance tests for tickets 02-04: the wire format is real, the
+// session identity is real, and SQLite is in the loop.
 package daemon
 
 import (
@@ -19,9 +19,12 @@ import (
 	"connectrpc.com/connect"
 	mortisev1 "github.com/AzeemWorsdorfer/Mortise/daemon/gen/mortise/v1"
 	"github.com/AzeemWorsdorfer/Mortise/daemon/gen/mortise/v1/mortisev1connect"
+	"github.com/AzeemWorsdorfer/Mortise/daemon/session"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 )
+
+const testWorkspace = "/tmp/mortise-handler-test-workspace"
 
 func TestHandler_Connect_SendsSystemStatus(t *testing.T) {
 	t.Parallel()
@@ -65,8 +68,16 @@ func TestHandler_Connect_SendsSystemStatus(t *testing.T) {
 	if status.ProviderId != "test-provider" {
 		t.Errorf("ProviderId: want %q, got %q", "test-provider", status.ProviderId)
 	}
-	if status.SessionId == "" {
-		t.Error("SessionId: want non-empty temp UUID")
+	wantID := session.NewSessionID(testWorkspace)
+	if status.SessionId != wantID {
+		t.Errorf("SessionId: want deterministic %q, got %q", wantID, status.SessionId)
+	}
+	if status.SessionName != session.DefaultName(testWorkspace) {
+		t.Errorf("SessionName: want %q, got %q",
+			session.DefaultName(testWorkspace), status.SessionName)
+	}
+	if status.WorkspacePath != testWorkspace {
+		t.Errorf("WorkspacePath: want %q, got %q", testWorkspace, status.WorkspacePath)
 	}
 	if status.ConnectedClients != 1 {
 		t.Errorf("ConnectedClients: want 1, got %d", status.ConnectedClients)
@@ -155,8 +166,10 @@ func TestServe_GracefulShutdown_RemovesSocket(t *testing.T) {
 	}
 }
 
-// newTestDaemon constructs a Daemon with a real net.Listener so the
-// handler exercises the same code path as production.
+// newTestDaemon constructs a Daemon with a real net.Listener, a real
+// session.Store, and a real Session wired in. The session is created
+// via the store so the handler exercises the same code path as
+// production.
 func newTestDaemon(t *testing.T, sockPath, model, provider string, logger *slog.Logger) *Daemon {
 	t.Helper()
 
@@ -165,16 +178,40 @@ func newTestDaemon(t *testing.T, sockPath, model, provider string, logger *slog.
 		t.Fatalf("listener: %v", err)
 	}
 
-	return &Daemon{
-		Listener:     listener,
-		SocketPath:   sockPath,
-		ModelID:      model,
-		ProviderID:   provider,
-		Workspace:    "/tmp/workspace",
-		Branch:       "main",
-		Logger:       logger,
-		NewSessionID: randomSessionID,
+	dir := t.TempDir()
+	store, err := session.Open(context.Background(), filepath.Join(dir, "mortise.db"))
+	if err != nil {
+		t.Fatalf("session.Open: %v", err)
 	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	now := time.Now().UTC().Truncate(time.Second)
+	sess := &session.Session{
+		ID:            session.NewSessionID(testWorkspace),
+		Name:          session.DefaultName(testWorkspace),
+		Status:        session.StatusRunning,
+		WorkspacePath: testWorkspace,
+		Branch:        "main",
+		TurnCount:     0,
+		CreatedAt:     now,
+		LastActiveAt:  now,
+	}
+	if err := store.CreateSession(context.Background(), sess); err != nil {
+		t.Fatalf("store.CreateSession: %v", err)
+	}
+
+	d := &Daemon{
+		Listener:   listener,
+		SocketPath: sockPath,
+		ModelID:    model,
+		ProviderID: provider,
+		Workspace:  testWorkspace,
+		Branch:     "main",
+		Logger:     logger,
+		Store:      store,
+	}
+	d.SetSession(sess)
+	return d
 }
 
 func waitForSocket(t *testing.T, path string) {
