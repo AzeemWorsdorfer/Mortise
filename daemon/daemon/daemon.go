@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"golang.org/x/net/http2"
@@ -20,9 +19,9 @@ import (
 )
 
 // Daemon is the Mortise daemon's runtime. It owns the listening
-// socket, the Connect-RPC handler, the system status snapshot, a
-// counter of currently-connected TUI clients, and the current
-// Session.
+// socket, the Connect-RPC handler, the EventBus that fans
+// ServerEvents out to every TUI client, the system status
+// snapshot, and the current Session.
 //
 // A Daemon value is constructed by main (or a test) and run with
 // Serve(ctx). Serve blocks until ctx is canceled or the listener
@@ -30,7 +29,9 @@ import (
 //
 // The Daemon does not own session creation: it only holds a
 // reference to a Session that main has already loaded or created
-// from the SQLite store.
+// from the SQLite store. Likewise the Daemon constructs the
+// EventBus during Serve and tears it down in shutdown, so callers
+// do not need to wire it up.
 type Daemon struct {
 	// Listener is the bound socket the daemon will serve on. Required.
 	Listener net.Listener
@@ -61,6 +62,13 @@ type Daemon struct {
 	// session persistence may leave it nil.
 	Store *session.Store
 
+	// EventBus is the in-process fan-out hub for ServerEvents.
+	// It is created by Serve (callers should not set it directly)
+	// and torn down by shutdown. While Serve is running, handlers
+	// call EventBus.Publish to broadcast; clients subscribe via
+	// EventBus.Subscribe on connect.
+	EventBus *EventBus
+
 	// session is the in-memory reference to the current Session. It
 	// is set by main (or a test) after loading or creating the
 	// session row. The Daemon does not mutate it directly; the
@@ -69,7 +77,6 @@ type Daemon struct {
 	session *session.Session
 
 	startedAt  time.Time
-	connCount  atomic.Int32
 	uptimeOnce sync.Once
 }
 
@@ -95,13 +102,19 @@ func (d *Daemon) Serve(ctx context.Context) error {
 		return errors.New("daemon: Logger is required")
 	}
 	d.uptimeOnce.Do(func() { d.startedAt = time.Now() })
+
+	// Spin up the EventBus and its fan-out goroutine. The bus is
+	// owned by the daemon and lives for the duration of Serve;
+	// shutdown() calls Close on it to release subscriber channels.
+	d.EventBus = NewEventBus()
+	d.EventBus.SetLogger(d.Logger.With("component", "eventbus"))
+	go d.EventBus.Run(ctx)
+
 	mux := http.NewServeMux()
 	path, handler := mortisev1connect.NewAgentServiceHandler(&ConnectHandler{
-		daemon:   d,
-		logger:   d.Logger.With("component", "agent_service"),
-		now:      time.Now,
-		connAdd:  d.connAdd,
-		connDrop: d.connDrop,
+		daemon: d,
+		logger: d.Logger.With("component", "agent_service"),
+		now:    time.Now,
 	})
 	mux.Handle(path, handler)
 
@@ -153,15 +166,27 @@ func (d *Daemon) shutdown(ctx context.Context, srv *http.Server, errCh <-chan er
 	if err := os.Remove(d.SocketPath); err != nil {
 		d.Logger.Warn("socket remove during shutdown", "err", err)
 	}
+	// Tear down the EventBus now that no more client goroutines
+	// are pushing to it. Run() has already returned because ctx
+	// was canceled; Close releases every subscriber channel so
+	// in-flight drain goroutines exit cleanly.
+	if d.EventBus != nil {
+		d.EventBus.Close()
+	}
 	// Wait for Serve to return.
 	<-errCh
 	return nil
 }
 
 // ConnectedClients returns the number of clients currently holding an
-// open Connect stream.
+// open Connect stream. The count is the EventBus's subscriber count;
+// the bus is the single source of truth for "how many clients are
+// listening right now".
 func (d *Daemon) ConnectedClients() int {
-	return int(d.connCount.Load())
+	if d.EventBus == nil {
+		return 0
+	}
+	return d.EventBus.SubscriberCount()
 }
 
 // Uptime returns the time elapsed since the daemon began serving.
@@ -172,9 +197,6 @@ func (d *Daemon) Uptime() time.Duration {
 	}
 	return time.Since(d.startedAt)
 }
-
-func (d *Daemon) connAdd()  { d.connCount.Add(1) }
-func (d *Daemon) connDrop() { d.connCount.Add(-1) }
 
 // sessionIDForLog extracts the session ID for log lines, or "<none>"
 // when the daemon has not yet been wired to a session.

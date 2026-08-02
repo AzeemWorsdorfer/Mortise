@@ -1,5 +1,5 @@
 ---
-status: ready-for-agent
+status: completed
 blocked-by: ["02-go-daemon-scaffold", "04-session-model-lifecycle"]
 ---
 
