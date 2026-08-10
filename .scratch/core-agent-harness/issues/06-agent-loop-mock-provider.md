@@ -1,6 +1,5 @@
 ---
 status: completed
-blocked-by: ["04-session-model-lifecycle", "05-event-bus"]
 ---
 
 # 06 — Agent Loop State Machine + Mock Provider
