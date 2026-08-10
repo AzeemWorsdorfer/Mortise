@@ -9,15 +9,21 @@
 //   - Bind a Unix domain socket and accept TUI client connections.
 //   - Subscribe every accepted client to the EventBus and pump
 //     events from the bus into the client's stream.
-//   - Dispatch incoming ClientCommands (ticket 05 only logs them;
-//     ticket 06+ will route them into the agent loop).
+//   - Start the agent loop on the first client connect (demo mode
+//     with a mock provider — ticket 06) and stream its events to
+//     every connected client.
+//   - Dispatch incoming ClientCommands (pause / resume / cancel /
+//     switch_provider / handoff / approve / reject) — currently only
+//     logged; routing them into the agent loop is a later ticket.
 //   - Publish a SystemStatus event through the bus on every
 //     successful connect so all observers see fresh state.
 //   - Track connected-client count for SystemStatus reporting via
 //     the bus's subscriber count.
 //
 // Is NOT responsible for:
-//   - The agent loop itself — that lives in the agent package (ticket 06+).
+//   - The agent loop implementation — that lives in the agent
+//     package; the daemon only constructs the loop and owns its
+//     lifecycle (Serve / StartAgent), not the state machine itself.
 //   - Tool execution — that lives in the tools package (later ticket).
 //   - Persisting sessions — that lives in the session package.
 //   - Provider selection — that lives in the providers package.

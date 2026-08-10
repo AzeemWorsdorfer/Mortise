@@ -1,5 +1,5 @@
 ---
-status: ready-for-agent
+status: completed
 ---
 
 # 06 — Agent Loop State Machine + Mock Provider
@@ -98,3 +98,34 @@ Keep the TUI changes minimal — just enough to prove the phase machine works en
 - [ ] TUI renders live phase transitions: user sees `[PLANNING]` → `[ACTING]` → `[OBSERVING]` → `[DECIDING]` cycle in real time
 - [ ] Invalid phase transitions (e.g., `IDLE → ACTING` without `PLANNING`) are blocked and logged
 - [ ] Agent loop can be started with a mock prompt, run to completion, and the session status transitions to `Completed`
+
+## Comments
+
+### 2026-08-08 — Implementation complete
+
+**New files:**
+- `daemon/agent/doc.go` — package documentation
+- `daemon/agent/provider.go` — Provider interface, ProviderEvent, ProviderEventType, ProviderRequest, UsageInfo, EventPublisher seam
+- `daemon/agent/agent.go` — AgentLoop struct, phase state machine, Run(), processTurn(), transitionTo(), validPhaseTransition()
+- `daemon/agent/mock_provider.go` — MockProvider with configurable turn sequences
+- `daemon/agent/agent_test.go` — 14 tests covering phase transitions, event emission, mock provider, context cancellation
+
+**Modified files:**
+- `daemon/daemon/daemon.go` — added AgentLoop field, agent package import, agent loop creation in Serve(), StartAgent() method
+- `daemon/daemon/handler.go` — added agentStarted atomic.Bool, auto-start agent loop on first connect, dispatchCommand replacing logCommand, buildSystemStatus reads phase from agent loop
+- `daemon/daemon/handler_test.go` — updated drainStatus to skip agent loop events (handles auto-start on connect)
+- `tui/src/main.tsx` — useReducer-based state, handles all 7 payload cases (phaseChange, thinking, text, toolPending, toolCompleted, status, summary), MockApp simulates phase events
+- `tui/src/components/status-panel.tsx` — accepts AppState, renders phase badge, phase history, agent output (thinking/text), tool calls, session summary
+- `tui/src/mock.ts` — added createMockPhaseEvents() for --mock mode demo
+
+**Verification:**
+- Go tests: all 6 packages pass (0 failures)
+- Go vet: clean
+- Go build: clean
+- TypeScript: clean (tsc --noEmit)
+
+**Design decisions:**
+- Agent loop auto-starts on first client connect with mock provider (3 turns). This is demo mode — real prompt dispatch comes in a later ticket (likely via a new ClientCommand type).
+- The Provider interface uses a channel-based streaming model (SendPrompt returns <-chan ProviderEvent) to mirror how real LLM APIs stream responses.
+- PLANNING → DECIDING is a valid transition (handles the case where a turn has no tool call — just thinking/text).
+- The handler uses atomic.Bool for agentStarted to ensure only one demo run per daemon lifetime.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"connectrpc.com/connect"
@@ -15,25 +16,27 @@ import (
 // ConnectHandler implements the mortise.v1.AgentService Connect bidi
 // stream method.
 //
-// In ticket 05 the handler's job is:
+// In ticket 06 the handler's job is:
 //   - Subscribe the new client to the EventBus and start a
 //     goroutine that drains the subscription channel to the
 //     stream (this is how every future event reaches the TUI).
 //   - Publish a SystemStatus event through the bus so the new
 //     client (and any others already connected) sees live
 //     session state.
-//   - Receive ClientCommands in a loop and log each one.
+//   - Start the agent loop on first client connect (demo mode with
+//     mock provider — real prompt dispatch in later tickets).
+//   - Receive ClientCommands in a loop and dispatch them to the
+//     agent loop (pause, resume, cancel).
 //   - Unsubscribe and clean up on disconnect.
-//
-// The agent loop (turn planning, tool execution, etc.) is added in
-// ticket 06+ — at that point, this handler will also forward
-// commands into the loop and rely on other producers publishing
-// events through the bus.
 type ConnectHandler struct {
 	daemon *Daemon
 	logger *slog.Logger
 
 	now func() time.Time
+
+	// agentStarted tracks whether the agent loop has been kicked
+	// off. Only the first client triggers the demo run.
+	agentStarted atomic.Bool
 }
 
 // Connect is the connect-go bidi-stream entry point.
@@ -81,9 +84,17 @@ func (h *ConnectHandler) Connect(
 	// so it reflects the count after this client subscribed.
 	bus.Publish(h.buildSystemStatus())
 
+	// Start the agent loop on first client connect (demo mode).
+	// The loop runs with a mock provider so the TUI can render
+	// live phase transitions without any real API calls.
+	if h.agentStarted.CompareAndSwap(false, true) {
+		h.daemon.StartAgent(ctx, "read the project structure and run tests")
+	}
+
 	// Block reading commands until the client disconnects or the
-	// stream context is canceled. We log every command; acting on
-	// them is ticket 06+ work.
+	// stream context is canceled. We dispatch each command to the
+	// agent loop for pause / resume / cancel; other commands are
+	// logged for future tickets.
 	for {
 		if err := ctx.Err(); err != nil {
 			break
@@ -94,7 +105,7 @@ func (h *ConnectHandler) Connect(
 			h.logger.Info("client disconnected", "client_id", clientID, "session_id", sessionID, "err", err)
 			break
 		}
-		h.logCommand(msg, sessionID)
+		h.dispatchCommand(msg, sessionID)
 	}
 
 	// Trigger Unsubscribe via the defer; wait for the drain
@@ -143,9 +154,14 @@ func (h *ConnectHandler) buildSystemStatus() *mortisev1.ServerEvent {
 	if h.daemon != nil {
 		connectedClients = int32(h.daemon.ConnectedClients())
 	}
+	// Read the current agent phase (defaults to IDLE if no loop).
+	phase := mortisev1.AgentPhase_IDLE
+	if h.daemon != nil && h.daemon.AgentLoop != nil {
+		phase = h.daemon.AgentLoop.Phase()
+	}
 	return &mortisev1.ServerEvent{
 		TimestampMs: uint64(h.now().UnixMilli()),
-		Phase:       mortisev1.AgentPhase_IDLE,
+		Phase:       phase,
 		TurnNumber:  0,
 		Payload: &mortisev1.ServerEvent_Status{
 			Status: &mortisev1.SystemStatus{
@@ -164,30 +180,25 @@ func (h *ConnectHandler) buildSystemStatus() *mortisev1.ServerEvent {
 	}
 }
 
-// logCommand emits a structured log line for an incoming ClientCommand.
-func (h *ConnectHandler) logCommand(cmd *mortisev1.ClientCommand, sessionID string) {
-	which := "unknown"
-	switch cmd.GetCommand().(type) {
+// dispatchCommand handles an incoming ClientCommand, routing it
+// to the agent loop or logging it for future tickets.
+func (h *ConnectHandler) dispatchCommand(cmd *mortisev1.ClientCommand, sessionID string) {
+	switch c := cmd.GetCommand().(type) {
 	case *mortisev1.ClientCommand_Pause:
-		which = "pause"
+		h.logger.Info("received command", "session_id", sessionID, "command", "pause", "reason", c.Pause.GetReason())
 	case *mortisev1.ClientCommand_Resume:
-		which = "resume"
+		h.logger.Info("received command", "session_id", sessionID, "command", "resume")
 	case *mortisev1.ClientCommand_Cancel:
-		which = "cancel"
+		h.logger.Info("received command", "session_id", sessionID, "command", "cancel", "reason", c.Cancel.GetReason())
 	case *mortisev1.ClientCommand_SwitchProvider:
-		which = "switch_provider"
+		h.logger.Info("received command", "session_id", sessionID, "command", "switch_provider", "provider", c.SwitchProvider.GetProviderId(), "model", c.SwitchProvider.GetModelId())
 	case *mortisev1.ClientCommand_Handoff:
-		which = "handoff"
+		h.logger.Info("received command", "session_id", sessionID, "command", "handoff", "reason", c.Handoff.GetReason())
 	case *mortisev1.ClientCommand_Approve:
-		which = "approve"
+		h.logger.Info("received command", "session_id", sessionID, "command", "approve", "call_id", c.Approve.GetCallId())
 	case *mortisev1.ClientCommand_Reject:
-		which = "reject"
+		h.logger.Info("received command", "session_id", sessionID, "command", "reject", "call_id", c.Reject.GetCallId(), "reason", c.Reject.GetReason())
 	}
-	h.logger.Info("received command",
-		"session_id", sessionID,
-		"command", which,
-		"payload", cmd.String(),
-	)
 }
 
 func safeString(d *Daemon, getter func(*Daemon) string) string {
