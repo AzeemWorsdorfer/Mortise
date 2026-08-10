@@ -8,8 +8,10 @@
 // AgentService.Connect bidi stream.
 //
 // In ticket 04 the daemon loads the persistent session on startup so
-// the TUI sees real session identity in SystemStatus. The agent
-// loop, tool execution, and event bus are still future work.
+// the TUI sees real session identity in SystemStatus. On the first
+// client connect it starts the agent loop in demo mode with a mock
+// provider (ticket 06), streaming live phase transitions and
+// tool-call events to the TUI. Tool execution is still future work.
 //
 // See: docs/specs/01-core-agent-harness.md §4.4, §5
 package main
@@ -23,8 +25,10 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -136,6 +140,24 @@ func branchFor(workspace string) string {
 	return branch
 }
 
+// gitBranch returns the current git branch for workspace, or an error
+// when workspace is not inside a working tree or git is unavailable.
+// A 5-second deadline prevents hanging on a corrupted repo or NFS stall.
+func gitBranch(workspace string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--abbrev-ref", "HEAD")
+	cmd.Dir = workspace
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("git rev-parse: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// main parses CLI flags, builds a logger, and runs the daemon until
+// it shuts down gracefully on SIGINT/SIGTERM. Exit codes: 2 for flag
+// errors, 1 for runtime errors, 0 for a clean shutdown.
 func main() {
 	opts, err := parseFlags(os.Args[1:])
 	if err != nil {
@@ -249,6 +271,16 @@ func openStore(opts runOptions, logger *slog.Logger) (*session.Store, func(), er
 		}
 	}
 	return store, closeFn, nil
+}
+
+// newListener binds the requested Unix socket. Delegates to the
+// daemon package so socket-binding policy (stale-socket cleanup,
+// mode locking, parent-dir creation) lives in one place.
+func newListener(socketPath string) (net.Listener, error) {
+	if socketPath == "" {
+		socketPath = defaultDir() + "/mortise.sock"
+	}
+	return mortisedaemon.NewUnixListener(socketPath)
 }
 
 // loadOrCreateSession resolves the session for the current workspace
