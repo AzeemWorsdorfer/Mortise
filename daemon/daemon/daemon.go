@@ -14,6 +14,7 @@ import (
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 
+	"github.com/AzeemWorsdorfer/Mortise/daemon/agent"
 	"github.com/AzeemWorsdorfer/Mortise/daemon/gen/mortise/v1/mortisev1connect"
 	"github.com/AzeemWorsdorfer/Mortise/daemon/session"
 )
@@ -69,6 +70,13 @@ type Daemon struct {
 	// EventBus.Subscribe on connect.
 	EventBus *EventBus
 
+	// AgentLoop is the phase-aware state machine that drives the
+	// agent's Planning → Acting → Observing → Deciding cycle.
+	// Created by Serve from the daemon's EventBus. The handler
+	// starts the loop when the user submits a prompt (or, in
+	// demo mode, on first client connect with a mock provider).
+	AgentLoop *agent.AgentLoop
+
 	// session is the in-memory reference to the current Session. It
 	// is set by main (or a test) after loading or creating the
 	// session row. The Daemon does not mutate it directly; the
@@ -109,6 +117,15 @@ func (d *Daemon) Serve(ctx context.Context) error {
 	d.EventBus = NewEventBus()
 	d.EventBus.SetLogger(d.Logger.With("component", "eventbus"))
 	go d.EventBus.Run(ctx)
+
+	// Wire up the AgentLoop with the EventBus as its publisher.
+	// The mock provider is used for demo purposes; real providers
+	// will be wired in later tickets.
+	d.AgentLoop = agent.NewAgentLoop(agent.Options{
+		Provider: agent.NewMockProvider(3),
+		Bus:      d.EventBus,
+		Logger:   d.Logger.With("component", "agent_loop"),
+	})
 
 	mux := http.NewServeMux()
 	path, handler := mortisev1connect.NewAgentServiceHandler(&ConnectHandler{
@@ -196,6 +213,25 @@ func (d *Daemon) Uptime() time.Duration {
 		return 0
 	}
 	return time.Since(d.startedAt)
+}
+
+// StartAgent kicks off the agent loop with the given user prompt.
+// It runs in a background goroutine and does not block. If the
+// loop is already running, StartAgent is a no-op.
+func (d *Daemon) StartAgent(ctx context.Context, prompt string) {
+	if d.AgentLoop == nil {
+		d.Logger.Warn("StartAgent called but AgentLoop is nil")
+		return
+	}
+	go func() {
+		d.Logger.Info("agent loop started", "prompt", prompt)
+		if err := d.AgentLoop.Run(ctx, prompt); err != nil {
+			if !errors.Is(err, context.Canceled) {
+				d.Logger.Warn("agent loop exited with error", "err", err)
+			}
+		}
+		d.Logger.Info("agent loop completed")
+	}()
 }
 
 // sessionIDForLog extracts the session ID for log lines, or "<none>"

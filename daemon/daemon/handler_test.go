@@ -174,31 +174,40 @@ func TestHandler_Connect_MultiClientFanOut(t *testing.T) {
 
 	// drainStatus is a tiny helper that pulls the next ServerEvent
 	// off stream and asserts it is a SystemStatus (the kind of
-	// event the bus delivers on every new subscription).
+	// event the bus delivers on every new subscription). In ticket
+	// 06 the agent loop auto-starts on first connect, so the stream
+	// may contain phase/thinking/text/tool events before the next
+	// SystemStatus arrives. drainStatus skips those interleaved
+	// agent-loop events and only asserts on the next SystemStatus.
 	drainStatus := func(t *testing.T, label string, stream *connect.BidiStreamForClient[mortisev1.ClientCommand, mortisev1.ServerEvent]) {
 		t.Helper()
-		resCh := make(chan struct {
-			r *mortisev1.ServerEvent
-			e error
-		}, 1)
-		go func() {
-			r, e := stream.Receive()
-			resCh <- struct {
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			resCh := make(chan struct {
 				r *mortisev1.ServerEvent
 				e error
-			}{r, e}
-		}()
-		select {
-		case got := <-resCh:
-			if got.e != nil {
-				t.Fatalf("%s: drain: %v", label, got.e)
+			}, 1)
+			go func() {
+				r, e := stream.Receive()
+				resCh <- struct {
+					r *mortisev1.ServerEvent
+					e error
+				}{r, e}
+			}()
+			select {
+			case got := <-resCh:
+				if got.e != nil {
+					t.Fatalf("%s: drain: %v", label, got.e)
+				}
+				if got.r.GetStatus() != nil {
+					return // found the SystemStatus
+				}
+				// Skip non-Status events (agent loop events).
+			case <-time.After(2 * time.Second):
+				t.Fatalf("%s: drain: no SystemStatus within 2s", label)
 			}
-			if got.r.GetStatus() == nil {
-				t.Fatalf("%s: drain: want SystemStatus, got %+v", label, got.r)
-			}
-		case <-time.After(2 * time.Second):
-			t.Fatalf("%s: drain: no event within 2s", label)
 		}
+		t.Fatalf("%s: drain: deadline exceeded", label)
 	}
 
 	// Connect A. Then connect B. B's SystemStatus fans out to both
