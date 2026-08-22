@@ -53,8 +53,20 @@ type AppAction =
   | { type: 'phase_change'; event: PhaseTransitionEvent; phase: AgentPhase }
   | { type: 'thinking'; text: string }
   | { type: 'text'; text: string }
-  | { type: 'tool_pending'; callId: string; toolName: string; parametersJson: string }
-  | { type: 'tool_completed'; callId: string; success: boolean; resultSummary: string }
+  | {
+      type: 'tool_pending';
+      callId: string;
+      toolName: string;
+      parametersJson: string;
+      turnNumber?: number;
+    }
+  | {
+      type: 'tool_completed';
+      callId: string;
+      success: boolean;
+      resultSummary: string;
+      durationMs?: number;
+    }
   | { type: 'summary'; text: string }
   | { type: 'connection'; state: ConnectionState };
 
@@ -85,6 +97,7 @@ function appReducer(state: AppState, action: AppAction): AppState {
           ...state.toolCalls,
           {
             callId: action.callId,
+            turnNumber: action.turnNumber,
             toolName: action.toolName,
             parametersJson: action.parametersJson,
             status: 'pending' as const,
@@ -100,6 +113,7 @@ function appReducer(state: AppState, action: AppAction): AppState {
                 ...tc,
                 status: action.success ? ('completed' as const) : ('failed' as const),
                 resultSummary: action.resultSummary,
+                durationMs: action.durationMs,
               }
             : tc,
         ),
@@ -149,7 +163,7 @@ function dispatchServerEvent(ev: ServerEvent, dispatch: (action: AppAction) => v
       break;
     }
     case 'toolPending': {
-      dispatchToolPending(ev.payload.value, dispatch);
+      dispatchToolPending(ev.payload.value, ev.turnNumber, dispatch);
       break;
     }
     case 'toolCompleted': {
@@ -164,22 +178,29 @@ function dispatchServerEvent(ev: ServerEvent, dispatch: (action: AppAction) => v
 }
 
 // dispatchToolPending forwards a toolPending payload to the reducer.
-function dispatchToolPending(tp: ToolCallPending, dispatch: (action: AppAction) => void): void {
+function dispatchToolPending(
+  tp: ToolCallPending,
+  turnNumber: number,
+  dispatch: (action: AppAction) => void,
+): void {
   dispatch({
     type: 'tool_pending',
     callId: tp.callId,
     toolName: tp.toolName,
     parametersJson: tp.parametersJson,
+    turnNumber,
   });
 }
 
 // dispatchToolCompleted forwards a toolCompleted payload to the reducer.
+// protobuf-es v1 surfaces int64 fields as bigint on Node.
 function dispatchToolCompleted(tc: ToolCallCompleted, dispatch: (action: AppAction) => void): void {
   dispatch({
     type: 'tool_completed',
     callId: tc.callId,
     success: tc.success,
     resultSummary: tc.resultSummary,
+    durationMs: Number(tc.durationMs),
   });
 }
 
