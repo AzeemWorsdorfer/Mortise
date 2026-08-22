@@ -17,6 +17,7 @@ import (
 	"github.com/AzeemWorsdorfer/Mortise/daemon/agent"
 	"github.com/AzeemWorsdorfer/Mortise/daemon/gen/mortise/v1/mortisev1connect"
 	"github.com/AzeemWorsdorfer/Mortise/daemon/session"
+	"github.com/AzeemWorsdorfer/Mortise/daemon/tools"
 )
 
 // Daemon is the Mortise daemon's runtime. It owns the listening
@@ -121,9 +122,21 @@ func (d *Daemon) Serve(ctx context.Context) error {
 	// Wire up the AgentLoop with the EventBus as its publisher.
 	// The mock provider is used for demo purposes; real providers
 	// will be wired in later tickets.
+	workspace := d.Workspace
+	if workspace == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			d.Logger.Warn("no workspace configured and Getwd failed; file tools will reject all reads", "err", err)
+		}
+		workspace = cwd
+	}
+	registry := tools.NewRegistry()
+	registry.Register(tools.NewFileRead(workspace))
+
 	d.AgentLoop = agent.NewAgentLoop(agent.Options{
 		Provider: agent.NewMockProvider(3),
 		Bus:      d.EventBus,
+		Tools:    registry,
 		Logger:   d.Logger.With("component", "agent_loop"),
 	})
 

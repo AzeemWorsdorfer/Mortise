@@ -24,9 +24,16 @@ import (
 //
 // The zero value is not usable; construct with NewAgentLoop.
 type AgentLoop struct {
+	// Concurrency guarantee: Run, and therefore all turn
+	// processing (handleProviderEvent and everything it calls),
+	// executes on a single goroutine. mu guards only the fields
+	// that Phase/Cancel/summary readers touch from other
+	// goroutines; turn-processing reads of turnNumber/toolCalls
+	// are single-goroutine by construction.
 	phase       mortisev1.AgentPhase
 	provider    Provider
 	bus         EventPublisher
+	tools       ToolExecutor
 	logger      *slog.Logger
 	turnNumber  int32
 	totalTurns  int32
@@ -35,6 +42,13 @@ type AgentLoop struct {
 	totalCost   float64
 	mu          sync.Mutex
 	cancel      context.CancelFunc
+
+	// toolOutcomes accumulates executed tool calls within the
+	// current run so each ProviderRequest carries the model's
+	// Observing input for everything executed so far. Guarded by
+	// mu: sendTurn reads it from the run goroutine while a future
+	// pause/resume path may mutate concurrently.
+	toolOutcomes []ToolOutcome
 }
 
 // Options configures a new AgentLoop. All fields are optional; a
@@ -43,6 +57,7 @@ type AgentLoop struct {
 type Options struct {
 	Provider Provider
 	Bus      EventPublisher
+	Tools    ToolExecutor
 	Logger   *slog.Logger
 }
 
@@ -56,6 +71,7 @@ func NewAgentLoop(opts Options) *AgentLoop {
 		phase:    mortisev1.AgentPhase_IDLE,
 		provider: opts.Provider,
 		bus:      opts.Bus,
+		tools:    opts.Tools,
 		logger:   logger,
 	}
 }
@@ -90,6 +106,12 @@ func (l *AgentLoop) Run(ctx context.Context, userPrompt string) error {
 
 	ctx, cancel := l.installCancel(ctx)
 	defer cancel()
+
+	// A fresh run observes only its own tool executions; outcomes
+	// from a previous run would feed the model stale context.
+	l.mu.Lock()
+	l.toolOutcomes = nil
+	l.mu.Unlock()
 
 	// Transition IDLE → PLANNING.
 	if err := l.transitionTo(mortisev1.AgentPhase_PLANNING, "user prompt received"); err != nil {
@@ -145,6 +167,13 @@ func (l *AgentLoop) sendTurn(ctx context.Context, turn int32, userPrompt string)
 		SystemPrompt: "You are a coding assistant. Plan, act, and observe.",
 		UserMessage:  userPrompt,
 	}
+
+	l.mu.Lock()
+	if len(l.toolOutcomes) > 0 {
+		req.ToolResults = append([]ToolOutcome{}, l.toolOutcomes...)
+	}
+	l.mu.Unlock()
+
 	eventCh, err := l.provider.SendPrompt(ctx, req)
 	if err != nil {
 		l.logger.Warn("provider send failed", "err", err, "turn", turn)
@@ -255,78 +284,6 @@ func (l *AgentLoop) publishText(turn int32, text string) {
 			Text: &mortisev1.AgentText{Text: text},
 		},
 	})
-}
-
-// handleToolCall drives one proposed tool invocation: transition to
-// ACTING, emit ToolCallPending, run the stubbed execution, emit
-// ToolCallCompleted, and move to OBSERVING.
-func (l *AgentLoop) handleToolCall(ctx context.Context, turn int32, ev ProviderEvent) (bool, error) {
-	callID := l.emitToolPending(turn, ev)
-	if err := l.stubExecuteTool(ctx); err != nil {
-		return false, err
-	}
-	l.emitToolCompleted(callID, ev.ToolName)
-	return false, nil
-}
-
-// emitToolPending transitions PLANNING → ACTING and publishes the
-// ToolCallPending event. Returns the generated call ID used to pair
-// the pending and completed events.
-func (l *AgentLoop) emitToolPending(turn int32, ev ProviderEvent) string {
-	// Transition PLANNING → ACTING.
-	_ = l.transitionTo(mortisev1.AgentPhase_ACTING, "tool call proposed")
-
-	callID := fmt.Sprintf("call-%d-%d", turn, l.toolCalls)
-	l.mu.Lock()
-	l.toolCalls++
-	l.mu.Unlock()
-
-	l.publish(&mortisev1.ServerEvent{
-		Phase:      mortisev1.AgentPhase_ACTING,
-		TurnNumber: turn,
-		Payload: &mortisev1.ServerEvent_ToolPending{
-			ToolPending: &mortisev1.ToolCallPending{
-				CallId:           callID,
-				ToolName:         ev.ToolName,
-				ParametersJson:   ev.ParametersJSON,
-				RiskLevel:        mortisev1.RiskLevel_SAFE,
-				RequiresApproval: false,
-			},
-		},
-	})
-	return callID
-}
-
-// stubExecuteTool simulates tool execution by sleeping 100ms. Real
-// tool execution arrives in ticket 07+.
-func (l *AgentLoop) stubExecuteTool(ctx context.Context) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-time.After(100 * time.Millisecond):
-	}
-	return nil
-}
-
-// emitToolCompleted publishes the ToolCallCompleted event for a
-// successfully stubbed execution and transitions ACTING → OBSERVING.
-func (l *AgentLoop) emitToolCompleted(callID, toolName string) {
-	l.publish(&mortisev1.ServerEvent{
-		Phase:      mortisev1.AgentPhase_ACTING,
-		TurnNumber: l.turnNumber,
-		Payload: &mortisev1.ServerEvent_ToolCompleted{
-			ToolCompleted: &mortisev1.ToolCallCompleted{
-				CallId:        callID,
-				ToolName:      toolName,
-				Success:       true,
-				ResultSummary: fmt.Sprintf("[stub] tool %q executed successfully", toolName),
-				DurationMs:    100,
-			},
-		},
-	})
-
-	// Transition ACTING → OBSERVING.
-	_ = l.transitionTo(mortisev1.AgentPhase_OBSERVING, "tool executed")
 }
 
 // handleDone accumulates turn usage and advances the phase machine

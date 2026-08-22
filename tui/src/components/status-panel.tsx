@@ -23,18 +23,13 @@ import { Box, Text } from 'ink';
 import type { SystemStatus, AgentPhase, PhaseTransitionEvent } from '../gen/mortise/v1/agent_pb.js';
 
 import type { ConnectionState } from '../transport.js';
+import { TraceSession, type ToolCallEntry } from './trace-session.js';
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-export interface ToolCallEntry {
-  callId: string;
-  toolName: string;
-  parametersJson: string;
-  status: 'pending' | 'completed' | 'failed';
-  resultSummary?: string;
-}
+export type { ToolCallEntry };
 
 export interface AppState {
   status: SystemStatus | null;
@@ -209,39 +204,8 @@ export function StatusPanel({ state }: { state: AppState }): React.ReactElement 
         </Box>
       )}
 
-      {/* ---- Tool calls ---- */}
-      {state.toolCalls.length > 0 && (
-        <Box borderStyle="single" paddingLeft={1} paddingRight={1} marginTop={1}>
-          <Box flexDirection="column">
-            <Text bold>Tool Calls</Text>
-            {state.toolCalls.map((tc) => {
-              const icon =
-                tc.status === 'pending'
-                  ? '\u23F3'
-                  : tc.status === 'completed'
-                    ? '\u2705'
-                    : '\u274C';
-              const color =
-                tc.status === 'pending' ? 'yellow' : tc.status === 'completed' ? 'green' : 'red';
-              return (
-                <Box key={tc.callId} flexDirection="column" marginTop={1}>
-                  <Text>
-                    <Text color={color}>{icon} </Text>
-                    <Text bold>{tc.toolName}</Text>
-                    <Text dimColor> {tc.parametersJson}</Text>
-                  </Text>
-                  {tc.resultSummary && (
-                    <Text dimColor>
-                      {'  '}
-                      {tc.resultSummary}
-                    </Text>
-                  )}
-                </Box>
-              );
-            })}
-          </Box>
-        </Box>
-      )}
+      {/* ---- Trace Session (tool call timeline) ---- */}
+      {state.toolCalls.length > 0 && <TraceSession entries={state.toolCalls} />}
 
       {/* ---- Session summary ---- */}
       {state.summary && (

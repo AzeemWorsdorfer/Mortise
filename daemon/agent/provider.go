@@ -107,15 +107,28 @@ type UsageInfo struct {
 // ProviderRequest
 // ---------------------------------------------------------------------------
 
+// ToolOutcome is one executed tool call fed back to the Provider so
+// the model can observe its result on the next turn.
+type ToolOutcome struct {
+	CallID   string
+	ToolName string
+	Output   string // truncated result summary, or the error message on failure
+}
+
 // ProviderRequest is the request the AgentLoop sends to the
 // Provider at the start of a turn. It carries the system prompt,
-// the user message, and any tool definitions the model can call.
+// the user message, any tool definitions the model can call, and
+// the outcomes of tool calls from previous turns (the Observing
+// input for the model).
 type ProviderRequest struct {
 	SystemPrompt string
 	UserMessage  string
 	// ToolDefinitions is a JSON string of the available tools
 	// (stubbed in this ticket; real tool schemas in ticket 07+).
 	ToolDefinitions string
+	// ToolResults carries outcomes of tool calls executed since the
+	// run started, in execution order.
+	ToolResults []ToolOutcome
 }
 
 // ---------------------------------------------------------------------------

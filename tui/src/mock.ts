@@ -106,8 +106,8 @@ export function createMockPhaseEvents(): ServerEvent[] {
     'call-1-0',
     'file_read',
     true,
-    '[stub] tool "file_read" executed successfully',
-    100,
+    '{\n  "name": "mortise",\n  "version": "0.1.0",\n  ...',
+    2,
   );
   addPhaseTransition(
     events,

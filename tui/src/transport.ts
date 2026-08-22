@@ -98,9 +98,14 @@ export function connect(
   let closed = false;
 
   const transport = createConnectTransport({
-    httpVersion: '1.1',
+    // The daemon serves h2c (HTTP/2 prior knowledge over a raw
+    // socket); HTTP/1.1 requests are rejected with 505.
+    httpVersion: '2',
     baseUrl: 'http://localhost',
-    nodeOptions: { socketPath },
+    // For HTTP/2 the options go straight to net.connect via
+    // http2.connect, where a Unix domain socket is spelled "path"
+    // (not "socketPath" as in the HTTP/1.1 request API).
+    nodeOptions: { path: socketPath },
   });
 
   // ------------------------------------------------------------------

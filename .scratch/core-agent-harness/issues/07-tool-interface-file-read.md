@@ -1,6 +1,6 @@
 ---
-status: ready-for-agent
-blocked-by: ["06-agent-loop-mock-provider"]
+status: ready-for-human
+blocked-by: []
 ---
 
 # 07 — Tool Interface, Registry & File Read
@@ -85,10 +85,10 @@ TRACE SESSION
 
 ## Acceptance criteria
 
-- [ ] `ToolRegistry.Register` panics on duplicate tool name
-- [ ] `file_read` returns file contents when given a valid path within the workspace
-- [ ] `file_read` returns an error for paths outside the workspace root (including symlink escapes)
-- [ ] `file_read` returns an error for non-existent files
-- [ ] Agent loop with mock provider calls file_read → real execution happens → `ToolCallCompleted` with `success=true` and file contents in `result_summary`
-- [ ] TUI renders at least one file_read call in the trace panel with name, input, output, duration, and success status
-- [ ] `ToolResult.DurationMs` is accurate (measured from Execute start to return)
+- [x] `ToolRegistry.Register` panics on duplicate tool name
+- [x] `file_read` returns file contents when given a valid path within the workspace
+- [x] `file_read` returns an error for paths outside the workspace root (including symlink escapes)
+- [x] `file_read` returns an error for non-existent files
+- [x] Agent loop with mock provider calls file_read → real execution happens → `ToolCallCompleted` with `success=true` and file contents in `result_summary`
+- [x] TUI renders at least one file_read call in the trace panel with name, input, output, duration, and success status
+- [x] `ToolResult.DurationMs` is accurate (measured from Execute start to return)

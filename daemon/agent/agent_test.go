@@ -315,7 +315,7 @@ func (b *blockingProvider) SendPrompt(ctx context.Context, _ *ProviderRequest) (
 
 func (b *blockingProvider) ProviderID() string { return "blocking" }
 
-func TestAgentLoop_EventToolCall_StubExecution(t *testing.T) {
+func TestAgentLoop_EventToolCall_WithoutRegistryReportsFailure(t *testing.T) {
 	t.Parallel()
 
 	spy := &eventSpy{}
@@ -339,15 +339,20 @@ func TestAgentLoop_EventToolCall_StubExecution(t *testing.T) {
 	}
 
 	events := spy.Events()
+	found := false
 	for _, ev := range events {
 		if tc := ev.GetToolCompleted(); tc != nil {
-			if !tc.Success {
-				t.Error("stub tool execution should report success=true")
+			found = true
+			if tc.Success {
+				t.Error("tool execution without a registry should report success=false")
 			}
-			if tc.ResultSummary == "" {
-				t.Error("stub tool execution should have a result summary")
+			if tc.ErrorMessage == "" {
+				t.Error("failed tool execution should carry an error message")
 			}
 		}
+	}
+	if !found {
+		t.Fatal("no ToolCallCompleted event published")
 	}
 }
 
