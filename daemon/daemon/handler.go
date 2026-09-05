@@ -196,8 +196,15 @@ func (h *ConnectHandler) dispatchCommand(cmd *mortisev1.ClientCommand, sessionID
 		h.logger.Info("received command", "session_id", sessionID, "command", "handoff", "reason", c.Handoff.GetReason())
 	case *mortisev1.ClientCommand_Approve:
 		h.logger.Info("received command", "session_id", sessionID, "command", "approve", "call_id", c.Approve.GetCallId())
+		if h.daemon.AgentLoop != nil {
+			h.daemon.AgentLoop.ApproveToolCall(c.Approve.GetCallId())
+		}
 	case *mortisev1.ClientCommand_Reject:
-		h.logger.Info("received command", "session_id", sessionID, "command", "reject", "call_id", c.Reject.GetCallId(), "reason", c.Reject.GetReason())
+		reason := c.Reject.GetReason()
+		h.logger.Info("received command", "session_id", sessionID, "command", "reject", "call_id", c.Reject.GetCallId(), "reason", reason)
+		if h.daemon.AgentLoop != nil {
+			h.daemon.AgentLoop.RejectToolCall(c.Reject.GetCallId(), reason)
+		}
 	}
 }
 

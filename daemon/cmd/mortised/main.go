@@ -56,10 +56,12 @@ type runOptions struct {
 // model/provider identifiers. Grouped to keep buildDaemon's
 // signature under the 5-parameter rule.
 type daemonInputs struct {
-	store    *session.Store
-	sess     *session.Session
-	model    string
-	provider string
+	store         *session.Store
+	sess          *session.Session
+	model         string
+	provider      string
+	undoStackSize int
+	toolApproval  map[string]string
 }
 
 // parseFlags binds CLI flags onto a fresh runOptions. Defined as a
@@ -209,10 +211,12 @@ func run(parent context.Context, opts runOptions, logger *slog.Logger) error {
 	logger.Info("socket bound", "path", opts.socketPath)
 
 	d := buildDaemon(listener, opts, daemonInputs{
-		store:    store,
-		sess:     sess,
-		model:    model,
-		provider: provider,
+		store:         store,
+		sess:          sess,
+		model:         model,
+		provider:      provider,
+		undoStackSize: cfg.Tools.UndoStackSize,
+		toolApproval:  cfg.Tools.Approval,
 	}, logger)
 	ctx, stop := setupContext(parent)
 	defer stop()
@@ -396,14 +400,16 @@ func serializeConfig(cfg *config.Config) string {
 // loaded session, the persistence store, and the resolved config.
 func buildDaemon(listener net.Listener, opts runOptions, in daemonInputs, logger *slog.Logger) *mortisedaemon.Daemon {
 	d := &mortisedaemon.Daemon{
-		Listener:   listener,
-		SocketPath: opts.socketPath,
-		ModelID:    in.model,
-		ProviderID: in.provider,
-		Workspace:  workspacePath(),
-		Branch:     branchFor(workspacePath()),
-		Logger:     logger.With("component", "daemon"),
-		Store:      in.store,
+		Listener:      listener,
+		SocketPath:    opts.socketPath,
+		ModelID:       in.model,
+		ProviderID:    in.provider,
+		Workspace:     workspacePath(),
+		Branch:        branchFor(workspacePath()),
+		UndoStackSize: in.undoStackSize,
+		ToolApproval:  in.toolApproval,
+		Logger:        logger.With("component", "daemon"),
+		Store:         in.store,
 	}
 	d.SetSession(in.sess)
 	return d

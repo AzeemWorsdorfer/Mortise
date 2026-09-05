@@ -88,6 +88,26 @@ func TestRun_ProjectOverridesGlobal(t *testing.T) {
 	}
 }
 
+func TestBuildDaemon_CarriesConfiguredUndoStackSize(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	cfg := &config.Config{Tools: config.ToolsConfig{
+		UndoStackSize: 7,
+		Approval:      map[string]string{"file_write": "confirm"},
+	}}
+	d := buildDaemon(nil, runOptions{socketPath: "socket"}, daemonInputs{
+		model:         "model",
+		provider:      "provider",
+		undoStackSize: cfg.Tools.UndoStackSize,
+		toolApproval:  cfg.Tools.Approval,
+	}, logger)
+	if d.UndoStackSize != 7 {
+		t.Fatalf("UndoStackSize = %d, want 7", d.UndoStackSize)
+	}
+	if d.ToolApproval["file_write"] != "confirm" {
+		t.Fatalf("ToolApproval[file_write] = %q, want confirm", d.ToolApproval["file_write"])
+	}
+}
+
 func TestRun_StartsAndShutsDown(t *testing.T) {
 	t.Parallel()
 
@@ -177,7 +197,11 @@ func TestRun_CreatesSessionOnFirstStart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session.Open: %v", err)
 	}
-	t.Cleanup(func() { _ = store.Close() })
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("store.Close: %v", err)
+		}
+	})
 
 	workspace := workspacePath()
 	wantID := session.NewSessionID(workspace)
@@ -288,7 +312,9 @@ func TestRun_RestartReusesExistingSession(t *testing.T) {
 		t.Errorf("CreatedAt mutated across restart: want %v, got %v",
 			originalCreatedAt, reloaded.CreatedAt)
 	}
-	_ = store.Close()
+	if err := store.Close(); err != nil {
+		t.Fatalf("store.Close: %v", err)
+	}
 }
 
 // TestLoadOrCreateSession_TransitionsThroughFullLifecycle exercises
@@ -303,7 +329,11 @@ func TestLoadOrCreateSession_TransitionsThroughFullLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session.Open: %v", err)
 	}
-	t.Cleanup(func() { _ = store.Close() })
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("store.Close: %v", err)
+		}
+	})
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	workspace := "/tmp/lifecycle-workspace"
@@ -407,6 +437,10 @@ func shortTempDirUnderTmp(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("MkdirTemp: %v", err)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	t.Cleanup(func() {
+		if err := os.RemoveAll(dir); err != nil {
+			t.Errorf("RemoveAll: %v", err)
+		}
+	})
 	return dir
 }

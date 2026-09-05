@@ -7,6 +7,7 @@ package daemon
 import (
 	"context"
 	"crypto/tls"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"github.com/AzeemWorsdorfer/Mortise/daemon/agent"
 	mortisev1 "github.com/AzeemWorsdorfer/Mortise/daemon/gen/mortise/v1"
 	"github.com/AzeemWorsdorfer/Mortise/daemon/gen/mortise/v1/mortisev1connect"
 	"github.com/AzeemWorsdorfer/Mortise/daemon/session"
@@ -25,6 +27,40 @@ import (
 )
 
 const testWorkspace = "/tmp/mortise-handler-test-workspace"
+
+func TestDaemon_ServeRegistersFileTools(t *testing.T) {
+	sockPath := filepath.Join(shortTempDir(t), "x.sock")
+	d := newTestDaemon(t, sockPath, "m", "p", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- d.Serve(ctx) }()
+	waitForSocket(t, sockPath)
+	deadline := time.Now().Add(2 * time.Second)
+	registry := d.ToolRegistry()
+	for registry == nil && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+		registry = d.ToolRegistry()
+	}
+	if registry == nil {
+		t.Fatal("Serve did not initialize ToolRegistry")
+	}
+
+	for _, name := range []string{"file_read", "file_write", "file_diff"} {
+		if _, ok := registry.Get(name); !ok {
+			t.Errorf("ToolRegistry.Get(%q) = false, want registered tool", name)
+		}
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Serve returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Serve did not return after context cancel")
+	}
+}
 
 func TestHandler_Connect_SendsSystemStatus(t *testing.T) {
 	t.Parallel()
@@ -45,7 +81,11 @@ func TestHandler_Connect_SendsSystemStatus(t *testing.T) {
 		"http://unix",
 	)
 	stream := client.Connect(ctx)
-	defer func() { _ = stream.CloseRequest() }()
+	defer func() {
+		if err := stream.CloseRequest(); err != nil {
+			t.Logf("CloseRequest: %v", err)
+		}
+	}()
 
 	// For a bidi stream, the first Send (even with a nil body) opens
 	// the request. Without it, Receive blocks forever waiting for the
@@ -106,7 +146,11 @@ func TestHandler_Connect_LogsIncomingCommand(t *testing.T) {
 		"http://unix",
 	)
 	stream := client.Connect(ctx)
-	defer func() { _ = stream.CloseRequest() }()
+	defer func() {
+		if err := stream.CloseRequest(); err != nil {
+			t.Logf("CloseRequest: %v", err)
+		}
+	}()
 
 	if err := stream.Send(nil); err != nil {
 		t.Fatalf("open stream: %v", err)
@@ -216,9 +260,17 @@ func TestHandler_Connect_MultiClientFanOut(t *testing.T) {
 	// event, or the test will read a stale SystemStatus instead of
 	// the PhaseTransitionEvent.
 	a := openStream(t)
-	defer func() { _ = a.CloseRequest() }()
+	defer func() {
+		if err := a.CloseRequest(); err != nil {
+			t.Logf("close stream a: %v", err)
+		}
+	}()
 	b := openStream(t)
-	defer func() { _ = b.CloseRequest() }()
+	defer func() {
+		if err := b.CloseRequest(); err != nil {
+			t.Logf("close stream b: %v", err)
+		}
+	}()
 
 	// A still has B's SystemStatus buffered; B has nothing.
 	drainStatus(t, "a (b's status)", a)
@@ -300,6 +352,134 @@ func TestServe_GracefulShutdown_RemovesSocket(t *testing.T) {
 	}
 }
 
+func TestHandler_Connect_ApprovalCommandsControlFileWrite(t *testing.T) {
+	for _, approved := range []bool{true, false} {
+		t.Run(map[bool]string{true: "approve", false: "reject"}[approved], func(t *testing.T) {
+			runWireApprovalScenario(t, approved)
+		})
+	}
+}
+
+func runWireApprovalScenario(t *testing.T, approved bool) {
+	t.Helper()
+	root := t.TempDir()
+	d := newTestDaemon(t, filepath.Join(shortTempDir(t), "x.sock"), "m", "p", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	d.Workspace = root
+	d.ToolApproval = map[string]string{"file_write": "confirm"}
+	d.AgentProvider = approvalProvider{parameters: `{"path":"nested/wire.txt","content":"wire\n"}`}
+	stop, done := startTestServer(t, d)
+	defer stopTestServer(t, stop, done)
+	waitForAgent(t, d)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	stream := mortisev1connect.NewAgentServiceClient(newUnixHTTPClient(d.SocketPath), "http://unix").Connect(ctx)
+	defer func() {
+		if err := stream.CloseRequest(); err != nil {
+			t.Logf("CloseRequest: %v", err)
+		}
+	}()
+	if err := stream.Send(nil); err != nil {
+		t.Fatalf("open stream: %v", err)
+	}
+	pending := receivePendingTool(t, stream)
+	if !pending.RequiresApproval || pending.DiffPreview == "" {
+		t.Fatalf("pending approval event = %+v, want approval and preview", pending)
+	}
+	if _, err := os.Stat(filepath.Join(root, "nested")); !os.IsNotExist(err) {
+		t.Fatalf("preview created parent directory; Stat err = %v", err)
+	}
+	command := &mortisev1.ClientCommand{}
+	if approved {
+		command.Command = &mortisev1.ClientCommand_Approve{Approve: &mortisev1.ApproveToolCall{CallId: pending.CallId}}
+	} else {
+		command.Command = &mortisev1.ClientCommand_Reject{Reject: &mortisev1.RejectToolCall{CallId: pending.CallId, Reason: "not authorized"}}
+	}
+	if err := stream.Send(command); err != nil {
+		t.Fatalf("send approval command: %v", err)
+	}
+	completed := receiveCompletedTool(t, stream)
+	if completed.Success != approved {
+		t.Fatalf("completed.Success = %v, want %v", completed.Success, approved)
+	}
+	_, statErr := os.Stat(filepath.Join(root, "nested", "wire.txt"))
+	if approved && statErr != nil {
+		t.Fatalf("approved write missing: %v", statErr)
+	}
+	if !approved && !os.IsNotExist(statErr) {
+		t.Fatalf("rejected write exists; Stat err = %v", statErr)
+	}
+}
+
+func startTestServer(t *testing.T, d *Daemon) (context.CancelFunc, <-chan error) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- d.Serve(ctx) }()
+	waitForSocket(t, d.SocketPath)
+	return cancel, done
+}
+
+func stopTestServer(t *testing.T, cancel context.CancelFunc, done <-chan error) {
+	t.Helper()
+	cancel()
+	if err := <-done; err != nil {
+		t.Errorf("Serve: %v", err)
+	}
+}
+
+func waitForAgent(t *testing.T, d *Daemon) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for d.ToolRegistry() == nil && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if d.ToolRegistry() == nil {
+		t.Fatal("Serve did not initialize ToolRegistry")
+	}
+}
+
+// approvalProvider emits one file_write proposal and then waits for the
+// AgentLoop to receive the approval command before the next turn.
+type approvalProvider struct {
+	parameters string
+}
+
+func (p approvalProvider) SendPrompt(context.Context, *agent.ProviderRequest) (<-chan agent.ProviderEvent, error) {
+	events := make(chan agent.ProviderEvent, 2)
+	events <- agent.ProviderEvent{Type: agent.EventToolCall, ToolName: "file_write", ParametersJSON: p.parameters}
+	events <- agent.ProviderEvent{Type: agent.EventDone}
+	close(events)
+	return events, nil
+}
+
+func (p approvalProvider) ProviderID() string { return "approval-test" }
+
+func receivePendingTool(t *testing.T, stream *connect.BidiStreamForClient[mortisev1.ClientCommand, mortisev1.ServerEvent]) *mortisev1.ToolCallPending {
+	t.Helper()
+	for {
+		event, err := stream.Receive()
+		if err != nil {
+			t.Fatalf("Receive pending: %v", err)
+		}
+		if pending := event.GetToolPending(); pending != nil {
+			return pending
+		}
+	}
+}
+
+func receiveCompletedTool(t *testing.T, stream *connect.BidiStreamForClient[mortisev1.ClientCommand, mortisev1.ServerEvent]) *mortisev1.ToolCallCompleted {
+	t.Helper()
+	for {
+		event, err := stream.Receive()
+		if err != nil {
+			t.Fatalf("Receive completed: %v", err)
+		}
+		if completed := event.GetToolCompleted(); completed != nil {
+			return completed
+		}
+	}
+}
+
 // newTestDaemon constructs a Daemon with a real net.Listener, a real
 // session.Store, and a real Session wired in. The session is created
 // via the store so the handler exercises the same code path as
@@ -317,7 +497,11 @@ func newTestDaemon(t *testing.T, sockPath, model, provider string, logger *slog.
 	if err != nil {
 		t.Fatalf("session.Open: %v", err)
 	}
-	t.Cleanup(func() { _ = store.Close() })
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("store.Close: %v", err)
+		}
+	})
 
 	now := time.Now().UTC().Truncate(time.Second)
 	sess := &session.Session{

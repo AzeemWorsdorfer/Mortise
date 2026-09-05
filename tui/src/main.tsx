@@ -58,6 +58,9 @@ type AppAction =
       callId: string;
       toolName: string;
       parametersJson: string;
+      diffPreview?: string;
+      additions?: number;
+      deletions?: number;
       turnNumber?: number;
     }
   | {
@@ -65,6 +68,9 @@ type AppAction =
       callId: string;
       success: boolean;
       resultSummary: string;
+      filesChanged: string[];
+      additions: number;
+      deletions: number;
       durationMs?: number;
     }
   | { type: 'summary'; text: string }
@@ -100,24 +106,15 @@ function appReducer(state: AppState, action: AppAction): AppState {
             turnNumber: action.turnNumber,
             toolName: action.toolName,
             parametersJson: action.parametersJson,
+            diffPreview: action.diffPreview,
+            additions: action.additions,
+            deletions: action.deletions,
             status: 'pending' as const,
           },
         ].slice(-20),
       };
     case 'tool_completed':
-      return {
-        ...state,
-        toolCalls: state.toolCalls.map((tc) =>
-          tc.callId === action.callId
-            ? {
-                ...tc,
-                status: action.success ? ('completed' as const) : ('failed' as const),
-                resultSummary: action.resultSummary,
-                durationMs: action.durationMs,
-              }
-            : tc,
-        ),
-      };
+      return updateToolCompleted(state, action);
     case 'summary':
       return { ...state, summary: action.text };
     case 'connection':
@@ -127,6 +124,37 @@ function appReducer(state: AppState, action: AppAction): AppState {
   }
 }
 
+function updateToolCompleted(
+  state: AppState,
+  action: Extract<AppAction, { type: 'tool_completed' }>,
+): AppState {
+  return {
+    ...state,
+    filesChanged: [
+      ...state.filesChanged.filter((change) => !action.filesChanged.includes(change.path)),
+      ...action.filesChanged.map((path) => ({
+        path,
+        diff: action.resultSummary,
+        additions: action.additions,
+        deletions: action.deletions,
+      })),
+    ],
+    toolCalls: state.toolCalls.map((tc) =>
+      tc.callId === action.callId
+        ? {
+            ...tc,
+            status: action.success ? ('completed' as const) : ('failed' as const),
+            resultSummary: action.resultSummary,
+            durationMs: action.durationMs,
+            filesChanged: action.filesChanged,
+            additions: action.additions,
+            deletions: action.deletions,
+          }
+        : tc,
+    ),
+  };
+}
+
 const INITIAL_STATE: AppState = {
   status: null,
   phase: 0, // PHASE_UNKNOWN
@@ -134,6 +162,7 @@ const INITIAL_STATE: AppState = {
   thinkingLines: [],
   textLines: [],
   toolCalls: [],
+  filesChanged: [],
   summary: null,
   connectionState: { kind: 'reconnecting', attempt: 0, nextInMs: 0 },
 };
@@ -188,6 +217,9 @@ function dispatchToolPending(
     callId: tp.callId,
     toolName: tp.toolName,
     parametersJson: tp.parametersJson,
+    diffPreview: tp.diffPreview,
+    additions: tp.additions,
+    deletions: tp.deletions,
     turnNumber,
   });
 }
@@ -200,6 +232,9 @@ function dispatchToolCompleted(tc: ToolCallCompleted, dispatch: (action: AppActi
     callId: tc.callId,
     success: tc.success,
     resultSummary: tc.resultSummary,
+    filesChanged: tc.filesChanged,
+    additions: tc.additions,
+    deletions: tc.deletions,
     durationMs: Number(tc.durationMs),
   });
 }

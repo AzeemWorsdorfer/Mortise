@@ -55,6 +55,14 @@ type Daemon struct {
 	// SystemStatus.branch. Empty string when not in a git repo.
 	Branch string
 
+	// UndoStackSize controls how many previous contents file_write keeps
+	// in memory for file_diff. Zero uses the default of ten.
+	UndoStackSize int
+
+	// ToolApproval contains per-tool policies. Only file_write confirm-mode
+	// handling is implemented here; other approval behavior is future work.
+	ToolApproval map[string]string
+
 	// Logger receives structured log lines. Required (use a no-op
 	// logger in tests that don't care).
 	Logger *slog.Logger
@@ -71,12 +79,21 @@ type Daemon struct {
 	// EventBus.Subscribe on connect.
 	EventBus *EventBus
 
+	// toolRegistry contains the built-in tools bound to Workspace. It is
+	// initialized by Serve and read through ToolRegistry.
+	toolRegistry   *tools.ToolRegistry
+	toolRegistryMu sync.RWMutex
+
 	// AgentLoop is the phase-aware state machine that drives the
 	// agent's Planning → Acting → Observing → Deciding cycle.
 	// Created by Serve from the daemon's EventBus. The handler
 	// starts the loop when the user submits a prompt (or, in
 	// demo mode, on first client connect with a mock provider).
 	AgentLoop *agent.AgentLoop
+
+	// AgentProvider overrides the demo provider when a caller needs to wire
+	// a real or test provider. A nil value uses the built-in mock provider.
+	AgentProvider agent.Provider
 
 	// session is the in-memory reference to the current Session. It
 	// is set by main (or a test) after loading or creating the
@@ -132,13 +149,22 @@ func (d *Daemon) Serve(ctx context.Context) error {
 	}
 	registry := tools.NewRegistry()
 	registry.Register(tools.NewFileRead(workspace))
+	fileWrite := tools.NewFileWrite(workspace, d.UndoStackSize)
+	registry.Register(fileWrite)
+	registry.Register(tools.NewFileDiff(workspace, fileWrite.History()))
 
+	provider := d.AgentProvider
+	if provider == nil {
+		provider = agent.NewMockProvider(3)
+	}
 	d.AgentLoop = agent.NewAgentLoop(agent.Options{
-		Provider: agent.NewMockProvider(3),
-		Bus:      d.EventBus,
-		Tools:    registry,
-		Logger:   d.Logger.With("component", "agent_loop"),
+		Provider:     provider,
+		Bus:          d.EventBus,
+		Tools:        registry,
+		ToolApproval: d.ToolApproval,
+		Logger:       d.Logger.With("component", "agent_loop"),
 	})
+	d.setToolRegistry(registry)
 
 	mux := http.NewServeMux()
 	path, handler := mortisev1connect.NewAgentServiceHandler(&ConnectHandler{
@@ -206,6 +232,21 @@ func (d *Daemon) shutdown(ctx context.Context, srv *http.Server, errCh <-chan er
 	// Wait for Serve to return.
 	<-errCh
 	return nil
+}
+
+// ToolRegistry returns the built-in tools bound to the daemon workspace,
+// or nil before Serve initializes them. The returned registry is safe for
+// concurrent lookup.
+func (d *Daemon) ToolRegistry() *tools.ToolRegistry {
+	d.toolRegistryMu.RLock()
+	defer d.toolRegistryMu.RUnlock()
+	return d.toolRegistry
+}
+
+func (d *Daemon) setToolRegistry(registry *tools.ToolRegistry) {
+	d.toolRegistryMu.Lock()
+	defer d.toolRegistryMu.Unlock()
+	d.toolRegistry = registry
 }
 
 // ConnectedClients returns the number of clients currently holding an

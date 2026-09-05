@@ -2,7 +2,7 @@
 // Tool interface that all tools (built-in, custom, MCP) conform to,
 // the ToolRegistry that owns them, and the built-in tools.
 //
-// See: ticket 07 — Tool Interface, Registry & File Read.
+// See: tickets 07-08 — Tool Interface, Registry & File Operations.
 package tools
 
 import (
@@ -38,11 +38,18 @@ type Tool interface {
 
 // ToolResult is the outcome of one tool execution. DurationMs is
 // measured by the ToolRegistry around Execute; individual tools do
-// not set it themselves.
+// not set it themselves. Additions and Deletions describe a
+// file diff when the tool produces one.
 type ToolResult struct {
 	Success      bool
 	Output       string
 	FilesChanged []string
+	Additions    int
+	Deletions    int
 	DurationMs   int64
 	Error        error
+}
+
+func failedResult(err error) (*ToolResult, error) {
+	return &ToolResult{Success: false, Error: err}, err
 }

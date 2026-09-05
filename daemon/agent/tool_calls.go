@@ -3,7 +3,7 @@
 // invocation through pending → execute → completed, and recording
 // outcomes for provider feedback.
 //
-// See: ticket 07 — Tool Interface, Registry & File Read.
+// See: docs/specs/01-core-agent-harness.md §3.3, ticket 08.
 package agent
 
 import (
@@ -20,9 +20,12 @@ import (
 // registry, emit ToolCallCompleted with the real outcome, and move
 // to OBSERVING.
 func (l *AgentLoop) handleToolCall(ctx context.Context, turn int32, ev ProviderEvent) (bool, error) {
-	callID := l.emitToolPending(turn, ev)
+	callID := l.emitToolPending(ctx, turn, ev)
 
-	result := l.executeTool(ctx, callID, ev)
+	result := l.awaitApproval(ctx, callID)
+	if result == nil {
+		result = l.executeTool(ctx, callID, ev)
+	}
 
 	l.emitToolCompleted(callID, turn, ev.ToolName, result)
 	return false, nil
@@ -32,9 +35,9 @@ func (l *AgentLoop) handleToolCall(ctx context.Context, turn int32, ev ProviderE
 // ToolCallPending event. The risk level comes from the registered
 // tool; unregistered tools report RISK_UNKNOWN. Returns the
 // generated call ID used to pair the pending and completed events.
-func (l *AgentLoop) emitToolPending(turn int32, ev ProviderEvent) string {
+func (l *AgentLoop) emitToolPending(ctx context.Context, turn int32, ev ProviderEvent) string {
 	// Transition PLANNING → ACTING.
-	_ = l.transitionTo(mortisev1.AgentPhase_ACTING, "tool call proposed")
+	l.transitionWithReport(mortisev1.AgentPhase_ACTING, "tool call proposed")
 
 	l.mu.Lock()
 	callID := fmt.Sprintf("call-%d-%d", turn, l.toolCalls)
@@ -47,6 +50,13 @@ func (l *AgentLoop) emitToolPending(turn int32, ev ProviderEvent) string {
 			riskLevel = tool.Risk()
 		}
 	}
+	preview, additions, deletions := l.previewTool(ctx, ev)
+	requiresApproval := l.requiresApproval(ev.ToolName)
+	if requiresApproval {
+		l.approvalMu.Lock()
+		l.pendingApprovals[callID] = make(chan approvalDecision, 1)
+		l.approvalMu.Unlock()
+	}
 
 	l.publish(&mortisev1.ServerEvent{
 		Phase:      mortisev1.AgentPhase_ACTING,
@@ -57,11 +67,68 @@ func (l *AgentLoop) emitToolPending(turn int32, ev ProviderEvent) string {
 				ToolName:         ev.ToolName,
 				ParametersJson:   ev.ParametersJSON,
 				RiskLevel:        riskLevel,
-				RequiresApproval: false,
+				RequiresApproval: requiresApproval,
+				DiffPreview:      preview,
+				Additions:        int32(additions),
+				Deletions:        int32(deletions),
 			},
 		},
 	})
 	return callID
+}
+
+type toolPreviewer interface {
+	Preview(context.Context, json.RawMessage) (*tools.ToolResult, error)
+}
+
+func (l *AgentLoop) previewTool(ctx context.Context, ev ProviderEvent) (string, int, int) {
+	if l.tools == nil {
+		return "", 0, 0
+	}
+	tool, ok := l.tools.Get(ev.ToolName)
+	if !ok {
+		return "", 0, 0
+	}
+	previewer, ok := tool.(toolPreviewer)
+	if !ok {
+		return "", 0, 0
+	}
+	result, err := previewer.Preview(ctx, json.RawMessage(ev.ParametersJSON))
+	if err != nil || result == nil || !result.Success {
+		return "", 0, 0
+	}
+	return truncateResultSummary(result.Output), result.Additions, result.Deletions
+}
+
+func (l *AgentLoop) requiresApproval(toolName string) bool {
+	l.approvalMu.Lock()
+	defer l.approvalMu.Unlock()
+	return toolName == "file_write" && l.approvalRules[toolName] == "confirm"
+}
+
+func (l *AgentLoop) awaitApproval(ctx context.Context, callID string) *tools.ToolResult {
+	l.approvalMu.Lock()
+	channel, pending := l.pendingApprovals[callID]
+	l.approvalMu.Unlock()
+	if !pending {
+		return nil
+	}
+	var decision approvalDecision
+	select {
+	case decision = <-channel:
+	case <-ctx.Done():
+		decision = approvalDecision{reason: ctx.Err().Error()}
+	}
+	l.approvalMu.Lock()
+	delete(l.pendingApprovals, callID)
+	l.approvalMu.Unlock()
+	if decision.approved {
+		return nil
+	}
+	if decision.reason == "" {
+		decision.reason = "tool call rejected"
+	}
+	return &tools.ToolResult{Success: false, Error: fmt.Errorf("file_write: %s", decision.reason)}
 }
 
 // resultSummaryLimit caps how much of a tool's output is carried in
@@ -134,10 +201,13 @@ func (l *AgentLoop) executeTool(ctx context.Context, callID string, ev ProviderE
 // executed call and transitions ACTING → OBSERVING.
 func (l *AgentLoop) emitToolCompleted(callID string, turn int32, toolName string, res *tools.ToolResult) {
 	completed := &mortisev1.ToolCallCompleted{
-		CallId:     callID,
-		ToolName:   toolName,
-		Success:    res.Error == nil,
-		DurationMs: res.DurationMs,
+		CallId:       callID,
+		ToolName:     toolName,
+		Success:      res.Error == nil,
+		DurationMs:   res.DurationMs,
+		FilesChanged: append([]string(nil), res.FilesChanged...),
+		Additions:    int32(res.Additions),
+		Deletions:    int32(res.Deletions),
 	}
 	if completed.Success {
 		completed.ResultSummary = truncateResultSummary(res.Output)
@@ -154,5 +224,5 @@ func (l *AgentLoop) emitToolCompleted(callID string, turn int32, toolName string
 	})
 
 	// Transition ACTING → OBSERVING.
-	_ = l.transitionTo(mortisev1.AgentPhase_OBSERVING, "tool executed")
+	l.transitionWithReport(mortisev1.AgentPhase_OBSERVING, "tool executed")
 }
