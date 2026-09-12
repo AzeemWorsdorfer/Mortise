@@ -24,8 +24,13 @@ const (
 // concurrent use and is shared by the write and diff tools for a workspace.
 type FileHistory struct {
 	mu         sync.Mutex
-	entries    map[string][]string
+	entries    map[string][]historyEntry
 	maxEntries int
+}
+
+type historyEntry struct {
+	content string
+	exists  bool
 }
 
 var histories sync.Map
@@ -54,7 +59,7 @@ func workspaceHistory(root string, stackSize int) *FileHistory {
 		history.mu.Unlock()
 		return history
 	}
-	history := &FileHistory{entries: make(map[string][]string), maxEntries: stackSize}
+	history := &FileHistory{entries: make(map[string][]historyEntry), maxEntries: stackSize}
 	actual, loaded := histories.LoadOrStore(key, history)
 	if loaded {
 		return actual.(*FileHistory)
@@ -62,22 +67,23 @@ func workspaceHistory(root string, stackSize int) *FileHistory {
 	return history
 }
 
-func (h *FileHistory) push(path, content string) {
+func (h *FileHistory) push(path, content string, exists bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	entries := append(h.entries[path], content)
+	entries := append(h.entries[path], historyEntry{content: content, exists: exists})
 	if len(entries) > h.maxEntries {
 		entries = entries[len(entries)-h.maxEntries:]
 	}
 	h.entries[path] = entries
 }
 
-func (h *FileHistory) last(path string) (string, bool) {
+func (h *FileHistory) last(path string) (string, bool, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	entries := h.entries[path]
 	if len(entries) == 0 {
-		return "", false
+		return "", false, false
 	}
-	return entries[len(entries)-1], true
+	entry := entries[len(entries)-1]
+	return entry.content, entry.exists, true
 }

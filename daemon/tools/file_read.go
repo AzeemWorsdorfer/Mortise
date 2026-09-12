@@ -60,7 +60,7 @@ func (f *FileRead) Execute(_ context.Context, params json.RawMessage) (*ToolResu
 		return nil, fmt.Errorf("file_read: params must include a \"path\" string")
 	}
 
-	content, _, _, err := readWorkspaceFile(f.workspaceRoot, p.Path, "file_read", false)
+	content, _, _, _, err := readWorkspaceFile(f.workspaceRoot, p.Path, "file_read", false)
 	if err != nil {
 		return nil, err
 	}

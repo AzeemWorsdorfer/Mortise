@@ -15,7 +15,6 @@ package agent
 import (
 	"context"
 	"encoding/json"
-	"strings"
 	"testing"
 	"time"
 
@@ -86,9 +85,13 @@ func TestAgentLoop_AdvertisesRegisteredToolsToProvider(t *testing.T) {
 	// The first request (before any tool ran) must already advertise
 	// every registered tool so the provider can propose them.
 	advertised := decodeToolNames(t, reqs[0].ToolDefinitions)
+	advertisedNames := make(map[string]bool, len(advertised))
+	for _, name := range advertised {
+		advertisedNames[name] = true
+	}
 	for _, name := range []string{"file_read", "file_write", "file_diff"} {
-		if !strings.Contains(reqs[0].ToolDefinitions, `"name":"`+name+`"`) {
-			t.Errorf("ToolDefinitions missing %q: %s", name, reqs[0].ToolDefinitions)
+		if !advertisedNames[name] {
+			t.Errorf("ToolDefinitions missing %q: %v", name, advertised)
 		}
 	}
 	if len(advertised) != 3 {

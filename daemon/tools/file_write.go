@@ -46,14 +46,14 @@ func (f *FileWrite) Preview(ctx context.Context, params json.RawMessage) (*ToolR
 	if err := ctx.Err(); err != nil {
 		return failedResult(err)
 	}
-	current, _, displayPath, err := readWorkspaceFile(f.workspaceRoot, p.Path, "file_write", true)
+	current, _, displayPath, exists, err := readWorkspaceFile(f.workspaceRoot, p.Path, "file_write", true)
 	if err != nil {
 		return failedResult(err)
 	}
 	additions, deletions := diffStats(current, *p.Content)
 	return &ToolResult{
 		Success:      true,
-		Output:       unifiedDiff(displayPath, current, *p.Content),
+		Output:       unifiedDiff(displayPath, current, *p.Content, exists),
 		FilesChanged: []string{displayPath},
 		Additions:    additions,
 		Deletions:    deletions,
@@ -99,12 +99,12 @@ func (f *FileWrite) Execute(ctx context.Context, params json.RawMessage) (*ToolR
 		return failedResult(err)
 	}
 
-	target, displayPath, previous, err := writeWorkspaceFile(f.workspaceRoot, p.Path, *p.Content)
+	target, displayPath, previous, exists, err := writeWorkspaceFile(f.workspaceRoot, p.Path, *p.Content)
 	if err != nil {
 		return failedResult(err)
 	}
-	f.history.push(target, previous)
-	diff := unifiedDiff(displayPath, previous, *p.Content)
+	f.history.push(target, previous, exists)
+	diff := unifiedDiff(displayPath, previous, *p.Content, exists)
 	additions, deletions := diffStats(previous, *p.Content)
 	return &ToolResult{
 		Success:      true,

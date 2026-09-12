@@ -116,11 +116,12 @@ type approvalDecision struct {
 
 func (l *AgentLoop) resolveApproval(callID string, decision approvalDecision) bool {
 	l.approvalMu.Lock()
-	defer l.approvalMu.Unlock()
 	channel, ok := l.pendingApprovals[callID]
 	if ok {
+		delete(l.pendingApprovals, callID)
 		channel <- decision
 	}
+	l.approvalMu.Unlock()
 	return ok
 }
 

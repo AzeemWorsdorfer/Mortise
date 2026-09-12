@@ -71,19 +71,20 @@ func (f *FileDiff) Execute(ctx context.Context, params json.RawMessage) (*ToolRe
 	if err := ctx.Err(); err != nil {
 		return failedResult(err)
 	}
-	current, target, displayPath, err := readWorkspaceFile(f.workspaceRoot, p.Path, "file_diff", false)
+	current, target, displayPath, _, err := readWorkspaceFile(f.workspaceRoot, p.Path, "file_diff", false)
 	if err != nil {
 		return failedResult(err)
 	}
-	previous, ok := f.history.last(target)
-	if !ok {
+	previous, previousExists, found := f.history.last(target)
+	if !found {
 		previous = ""
+		previousExists = false
 	}
 	additions, deletions := diffStats(previous, current)
-	return &ToolResult{Success: true, Output: unifiedDiff(displayPath, previous, current), Additions: additions, Deletions: deletions}, nil
+	return &ToolResult{Success: true, Output: unifiedDiff(displayPath, previous, current, previousExists), Additions: additions, Deletions: deletions}, nil
 }
 
-func unifiedDiff(path, oldContent, newContent string) string {
+func unifiedDiff(path, oldContent, newContent string, oldExists bool) string {
 	oldLines := splitDiffLines(oldContent)
 	newLines := splitDiffLines(newContent)
 	operations := diffOperations(oldLines, newLines)
@@ -92,7 +93,7 @@ func unifiedDiff(path, oldContent, newContent string) string {
 		return ""
 	}
 	oldHeader := "--- a/" + path
-	if oldContent == "" {
+	if !oldExists {
 		oldHeader = "--- /dev/null"
 	}
 	newHeader := "+++ b/" + path

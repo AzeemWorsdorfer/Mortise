@@ -77,6 +77,26 @@ func TestFileWriteOverwritesExistingFileAndTracksHistory(t *testing.T) {
 	}
 }
 
+func TestFileDiffLabelsExistingEmptyFileAsExisting(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "empty.txt")
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writer := NewFileWrite(root)
+	if _, err := writer.Execute(context.Background(), mustJSONWrite("empty.txt", "after\n")); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	res, err := NewFileDiff(root, writer.History()).Execute(context.Background(), json.RawMessage(`{"path":"empty.txt"}`))
+	if err != nil || !res.Success {
+		t.Fatalf("file_diff = (%+v, %v), want success", res, err)
+	}
+	if strings.Contains(res.Output, "--- /dev/null") || !strings.Contains(res.Output, "--- a/empty.txt") {
+		t.Errorf("result output = %q, want existing-file header", res.Output)
+	}
+}
+
 func TestFileWriteRejectsWorkspaceEscapesIncludingSymlinks(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()
