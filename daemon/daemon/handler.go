@@ -89,7 +89,11 @@ func (h *ConnectHandler) Connect(
 	// The loop runs with a mock provider so the TUI can render
 	// live phase transitions without any real API calls.
 	if h.agentStarted.CompareAndSwap(false, true) {
-		h.daemon.StartAgent(ctx, "read the project structure and run tests")
+		agentContext := h.daemon.agentContext
+		if agentContext == nil {
+			agentContext = context.Background()
+		}
+		h.daemon.StartAgent(agentContext, "read the project structure and run tests")
 	}
 
 	// Block reading commands until the client disconnects or the

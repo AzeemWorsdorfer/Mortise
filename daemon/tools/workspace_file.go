@@ -22,27 +22,32 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+type workspaceWriteTarget struct {
+	parentFD    int
+	descriptors []int
+	name        string
+	target      string
+	cleanPath   string
+}
+
 func writeWorkspaceFile(root, requested, content string) (string, string, string, bool, error) {
-	previous, target, cleanPath, existed, err := readWorkspaceFile(root, requested, "file_write", true)
+	workspace, err := openWorkspaceWriteTarget(root, requested)
 	if err != nil {
 		return "", "", "", false, err
 	}
-	resolvedRoot, err := resolvedWorkspaceRoot(root, "file_write")
+	previous, existed, err := readWorkspaceTarget(workspace.parentFD, workspace.name, workspace.target)
 	if err != nil {
-		return "", "", "", false, err
+		pathErr := closeDescriptors(workspace.descriptors)
+		return "", "", "", false, combineWorkspaceErrors("file_write: reading existing file", err, nil, nil, pathErr)
 	}
-	parentFD, descriptors, name, err := openWorkspaceParentForTarget(resolvedRoot, cleanPath, requested, true)
+	mode, err := workspaceFileMode(workspace.parentFD, workspace.name)
 	if err != nil {
-		return "", "", "", false, err
-	}
-	mode, err := workspaceFileMode(parentFD, name)
-	if err != nil {
-		pathErr := closeDescriptors(descriptors)
+		pathErr := closeDescriptors(workspace.descriptors)
 		return "", "", "", false, combineWorkspaceErrors("file_write: inspecting existing file", err, nil, nil, pathErr)
 	}
-	tempFile, tempName, err := createWorkspaceTemp(parentFD, "file_write", mode)
+	tempFile, tempName, err := createWorkspaceTemp(workspace.parentFD, "file_write", mode)
 	if err != nil {
-		closeErr := closeDescriptors(descriptors)
+		closeErr := closeDescriptors(workspace.descriptors)
 		if closeErr != nil {
 			return "", "", "", false, fmt.Errorf("file_write: creating temporary file: %v; closing workspace path: %w", err, closeErr)
 		}
@@ -50,41 +55,94 @@ func writeWorkspaceFile(root, requested, content string) (string, string, string
 	}
 	if _, err = tempFile.WriteString(content); err != nil {
 		closeErr := tempFile.Close()
-		removeErr := unix.Unlinkat(parentFD, tempName, 0)
-		pathErr := closeDescriptors(descriptors)
+		removeErr := unix.Unlinkat(workspace.parentFD, tempName, 0)
+		pathErr := closeDescriptors(workspace.descriptors)
 		return "", "", "", false, combineWorkspaceErrors("file_write: writing temporary file", err, closeErr, removeErr, pathErr)
 	}
 	if err = tempFile.Close(); err != nil {
-		removeErr := unix.Unlinkat(parentFD, tempName, 0)
-		pathErr := closeDescriptors(descriptors)
+		removeErr := unix.Unlinkat(workspace.parentFD, tempName, 0)
+		pathErr := closeDescriptors(workspace.descriptors)
 		return "", "", "", false, combineWorkspaceErrors("file_write: closing temporary file", err, nil, removeErr, pathErr)
 	}
-	if err = unix.Renameat(parentFD, tempName, parentFD, name); err != nil {
-		removeErr := unix.Unlinkat(parentFD, tempName, 0)
-		pathErr := closeDescriptors(descriptors)
+	if err = unix.Renameat(workspace.parentFD, tempName, workspace.parentFD, workspace.name); err != nil {
+		removeErr := unix.Unlinkat(workspace.parentFD, tempName, 0)
+		pathErr := closeDescriptors(workspace.descriptors)
 		return "", "", "", false, combineWorkspaceErrors("file_write: replacing file", err, nil, removeErr, pathErr)
 	}
-	if err = closeDescriptors(descriptors); err != nil {
+	if err = closeDescriptors(workspace.descriptors); err != nil {
 		return "", "", "", false, fmt.Errorf("file_write: closing workspace path: %w", err)
 	}
-	return target, cleanPath, previous, existed, nil
+	return workspace.target, workspace.cleanPath, previous, existed, nil
 }
 
-func openWorkspaceParentForTarget(root, cleanPath, requested string, createParents bool) (int, []int, string, error) {
-	expected, err := workspaceAncestorIdentities(root, cleanPath)
+func openWorkspaceWriteTarget(root, requested string) (workspaceWriteTarget, error) {
+	resolvedRoot, err := resolvedWorkspaceRoot(root, "file_write")
 	if err != nil {
-		return 0, nil, "", boundaryPathError("file_write", requested, err)
+		return workspaceWriteTarget{}, err
 	}
-	parentFD, descriptors, err := openWorkspaceParent(root, cleanPath, requested, workspaceParentOptions{
-		createParents: createParents,
+	rootFD, rootIdentity, err := openWorkspaceRoot(resolvedRoot, "file_write")
+	if err != nil {
+		return workspaceWriteTarget{}, err
+	}
+	cleanPath, err := cleanWorkspacePath(resolvedRoot, requested, "file_write")
+	if err != nil {
+		unix.Close(rootFD)
+		return workspaceWriteTarget{}, err
+	}
+	cleanPath, target, err := resolveWorkspaceTarget(resolvedRoot, cleanPath, requested, workspaceOpenOptions{
+		createParents: true,
+		allowMissing:  true,
 		toolName:      "file_write",
-		expected:      expected,
 	})
 	if err != nil {
-		return 0, nil, "", err
+		unix.Close(rootFD)
+		return workspaceWriteTarget{}, err
+	}
+	expected, err := workspaceAncestorIdentities(resolvedRoot, cleanPath)
+	if err != nil {
+		unix.Close(rootFD)
+		return workspaceWriteTarget{}, boundaryPathError("file_write", requested, err)
+	}
+	expected[0] = rootIdentity
+	parentFD, descriptors, err := openWorkspaceParent(resolvedRoot, cleanPath, requested, workspaceParentOptions{
+		createParents: true,
+		toolName:      "file_write",
+		expected:      expected,
+		rootFD:        rootFD,
+	})
+	if err != nil {
+		return workspaceWriteTarget{}, err
 	}
 	components := strings.Split(cleanPath, string(filepath.Separator))
-	return parentFD, descriptors, components[len(components)-1], nil
+	return workspaceWriteTarget{
+		parentFD:    parentFD,
+		descriptors: descriptors,
+		name:        components[len(components)-1],
+		target:      target,
+		cleanPath:   cleanPath,
+	}, nil
+}
+
+func readWorkspaceTarget(parentFD int, name, target string) (string, bool, error) {
+	file, err := openWorkspaceFileDescriptor(parentFD, name, target, workspaceOpenOptions{
+		flags:    unix.O_RDONLY | unix.O_NONBLOCK | unix.O_CLOEXEC | unix.O_NOFOLLOW,
+		toolName: "file_write",
+	})
+	if errors.Is(err, unix.ENOENT) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	content, readErr := io.ReadAll(file)
+	closeErr := file.Close()
+	if readErr != nil {
+		return "", true, errors.Join(readErr, closeErr)
+	}
+	if closeErr != nil {
+		return "", true, closeErr
+	}
+	return string(content), true, nil
 }
 
 func workspaceFileMode(parentFD int, name string) (uint32, error) {
@@ -106,6 +164,10 @@ func createWorkspaceTemp(parentFD int, toolName string, mode uint32) (*os.File, 
 		}
 		if err != nil {
 			return nil, "", fmt.Errorf("%s: creating temporary file: %w", toolName, err)
+		}
+		if err := unix.Fchmod(fd, mode); err != nil {
+			closeErr := unix.Close(fd)
+			return nil, "", errors.Join(fmt.Errorf("%s: setting temporary file mode: %w", toolName, err), closeErr)
 		}
 		file := os.NewFile(uintptr(fd), name)
 		if file == nil {
@@ -135,7 +197,7 @@ func combineWorkspaceErrors(operation string, operationErr, closeErr, removeErr,
 func readWorkspaceFile(root, requested, toolName string, allowMissing bool) (string, string, string, bool, error) {
 	file, target, cleanPath, existed, err := openWorkspaceFile(root, requested, workspaceOpenOptions{
 		allowMissing: allowMissing,
-		flags:        unix.O_RDONLY | unix.O_CLOEXEC | unix.O_NOFOLLOW,
+		flags:        unix.O_RDONLY | unix.O_NONBLOCK | unix.O_CLOEXEC | unix.O_NOFOLLOW,
 		toolName:     toolName,
 	})
 	if err != nil {
@@ -171,6 +233,7 @@ type workspaceParentOptions struct {
 	allowMissing  bool
 	toolName      string
 	expected      []workspaceIdentity
+	rootFD        int
 }
 
 type workspaceIdentity struct {
@@ -203,6 +266,7 @@ func openWorkspaceFile(root, requested string, options workspaceOpenOptions) (*o
 		allowMissing:  options.allowMissing,
 		toolName:      options.toolName,
 		expected:      expected,
+		rootFD:        -1,
 	})
 	if errors.Is(err, errWorkspaceFileMissing) && options.allowMissing {
 		return nil, target, cleanPath, false, nil
@@ -273,6 +337,12 @@ func openWorkspaceFileDescriptor(parentFD int, name, target string, options work
 	if err != nil {
 		return nil, err
 	}
+	if err := rejectRegularFile(fileFD, options.toolName, name); err != nil {
+		if closeErr := unix.Close(fileFD); closeErr != nil {
+			return nil, fmt.Errorf("%v; closing file descriptor: %w", err, closeErr)
+		}
+		return nil, err
+	}
 	if err := rejectHardLink(fileFD, options.toolName, name); err != nil {
 		if closeErr := unix.Close(fileFD); closeErr != nil {
 			return nil, fmt.Errorf("%v; closing file descriptor: %w", err, closeErr)
@@ -287,6 +357,20 @@ func openWorkspaceFileDescriptor(parentFD int, name, target string, options work
 		return nil, errors.New("opening file returned an invalid file")
 	}
 	return file, nil
+}
+
+func rejectRegularFile(fileFD int, toolName, requested string) error {
+	var stat unix.Stat_t
+	if err := unix.Fstat(fileFD, &stat); err != nil {
+		return fmt.Errorf("%s: inspecting %q: %w", toolName, requested, err)
+	}
+	if stat.Mode&unix.S_IFMT != unix.S_IFREG {
+		if stat.Mode&unix.S_IFMT == unix.S_IFDIR {
+			return fmt.Errorf("%s: %q is a directory, not a regular file", toolName, requested)
+		}
+		return fmt.Errorf("%s: %q is not a regular file", toolName, requested)
+	}
+	return nil
 }
 
 func rejectHardLink(fileFD int, toolName, requested string) error {
@@ -347,10 +431,27 @@ func verifyWorkspaceIdentity(fd int, expected workspaceIdentity) error {
 	return nil
 }
 
-func openWorkspaceParent(root, cleanPath, requested string, options workspaceParentOptions) (int, []int, error) {
+func openWorkspaceRoot(root, toolName string) (int, workspaceIdentity, error) {
 	rootFD, err := unix.Open(root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
-		return 0, nil, fmt.Errorf("%s: opening workspace root: %w", options.toolName, err)
+		return 0, workspaceIdentity{}, fmt.Errorf("%s: opening workspace root: %w", toolName, err)
+	}
+	identity, err := workspaceIdentityForDescriptor(rootFD)
+	if err != nil {
+		closeErr := unix.Close(rootFD)
+		return 0, workspaceIdentity{}, errors.Join(fmt.Errorf("%s: inspecting workspace root: %w", toolName, err), closeErr)
+	}
+	return rootFD, identity, nil
+}
+
+func openWorkspaceParent(root, cleanPath, requested string, options workspaceParentOptions) (int, []int, error) {
+	rootFD := options.rootFD
+	if rootFD < 0 {
+		var err error
+		rootFD, _, err = openWorkspaceRoot(root, options.toolName)
+		if err != nil {
+			return 0, nil, err
+		}
 	}
 	descriptors := []int{rootFD}
 	if len(options.expected) > 0 {

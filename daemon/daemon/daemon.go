@@ -95,6 +95,9 @@ type Daemon struct {
 	// a real or test provider. A nil value uses the built-in mock provider.
 	AgentProvider agent.Provider
 
+	// agentContext is the daemon-lifetime context used by the agent loop.
+	agentContext context.Context
+
 	// session is the in-memory reference to the current Session. It
 	// is set by main (or a test) after loading or creating the
 	// session row. The Daemon does not mutate it directly; the
@@ -121,6 +124,9 @@ func (d *Daemon) Session() *session.Session { return d.session }
 // until ctx is canceled. On exit it closes the listener (which
 // removes the socket file on Unix) and returns any HTTP-server error.
 func (d *Daemon) Serve(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if d.Listener == nil {
 		return errors.New("daemon: Listener is required")
 	}
@@ -128,6 +134,7 @@ func (d *Daemon) Serve(ctx context.Context) error {
 		return errors.New("daemon: Logger is required")
 	}
 	d.uptimeOnce.Do(func() { d.startedAt = time.Now() })
+	d.agentContext = ctx
 
 	// Spin up the EventBus and its fan-out goroutine. The bus is
 	// owned by the daemon and lives for the duration of Serve;

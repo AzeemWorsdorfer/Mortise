@@ -364,14 +364,13 @@ func (l *AgentLoop) handleDone(turn int32, ev ProviderEvent) {
 // accumulateUsage folds the turn's token/cost accounting into the
 // loop totals.
 func (l *AgentLoop) accumulateUsage(turn int32, usage *UsageInfo) {
-	if usage == nil {
-		return
-	}
 	l.mu.Lock()
-	l.totalTokens += usage.InputTokens + usage.OutputTokens
-	l.totalCost += usage.CostUSD
+	defer l.mu.Unlock()
+	if usage != nil {
+		l.totalTokens += usage.InputTokens + usage.OutputTokens
+		l.totalCost += usage.CostUSD
+	}
 	l.totalTurns = turn
-	l.mu.Unlock()
 }
 
 // advanceAfterDone moves the loop from the phase the turn ended in
