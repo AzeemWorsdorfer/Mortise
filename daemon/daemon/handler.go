@@ -63,15 +63,15 @@ func (h *ConnectHandler) Connect(
 		defer close(drainDone)
 		for ev := range subCh {
 			if err := stream.Send(ev); err != nil {
-				// Best-effort: the stream is broken, and the
-				// receive loop below will exit when its context
-				// is canceled.
+				bus.Unsubscribe(clientID)
+				h.cancelPendingApprovalsIfDisconnected()
 				return
 			}
 		}
 	}()
 	defer func() {
 		bus.Unsubscribe(clientID)
+		h.cancelPendingApprovalsIfDisconnected()
 		<-drainDone
 	}()
 
@@ -123,6 +123,15 @@ var errNoEventBus = errors.New("daemon: EventBus not initialized")
 // sessionIDForLog returns the daemon's current session ID for log
 // lines, or "<none>" when the daemon has not been wired to a session
 // (which should only happen in misconfigured tests).
+func (h *ConnectHandler) cancelPendingApprovalsIfDisconnected() {
+	if h.daemon == nil || h.daemon.EventBus == nil || h.daemon.AgentLoop == nil {
+		return
+	}
+	if h.daemon.EventBus.SubscriberCount() == 0 {
+		h.daemon.AgentLoop.CancelPendingApprovals("approval stream disconnected")
+	}
+}
+
 func (h *ConnectHandler) sessionIDForLog() string {
 	if h.daemon == nil {
 		return "<none>"

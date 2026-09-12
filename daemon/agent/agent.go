@@ -101,6 +101,21 @@ func (l *AgentLoop) RejectToolCall(callID, reason string) bool {
 	return l.resolveApproval(callID, approvalDecision{reason: reason})
 }
 
+// CancelPendingApprovals rejects every approval still waiting for a decision.
+func (l *AgentLoop) CancelPendingApprovals(reason string) {
+	if reason == "" {
+		reason = "tool call rejected"
+	}
+	l.approvalMu.Lock()
+	defer l.approvalMu.Unlock()
+	for _, channel := range l.pendingApprovals {
+		select {
+		case channel <- approvalDecision{reason: reason}:
+		default:
+		}
+	}
+}
+
 func cloneApprovalRules(rules map[string]string) map[string]string {
 	cloned := make(map[string]string, len(rules))
 	for name, policy := range rules {
