@@ -217,7 +217,7 @@ function dispatchToolCompleted(tc: ToolCallCompleted, dispatch: (action: AppActi
     type: 'tool_completed',
     callId: tc.callId,
     success: tc.success,
-    resultSummary: tc.resultSummary,
+    resultSummary: tc.success ? tc.resultSummary : tc.errorMessage,
     filesChanged: tc.filesChanged,
     additions: tc.additions,
     deletions: tc.deletions,

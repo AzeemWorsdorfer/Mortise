@@ -100,6 +100,12 @@ type workspaceParentOptions struct {
 	createParents bool
 	allowMissing  bool
 	toolName      string
+	expected      []workspaceIdentity
+}
+
+type workspaceIdentity struct {
+	device int32
+	inode  uint64
 }
 
 var errWorkspaceFileMissing = errors.New("workspace file missing")
@@ -118,10 +124,15 @@ func openWorkspaceFile(root, requested string, options workspaceOpenOptions) (*o
 		return nil, "", "", false, err
 	}
 	components := strings.Split(cleanPath, string(filepath.Separator))
+	expected, err := workspaceAncestorIdentities(resolvedRoot, cleanPath)
+	if err != nil {
+		return nil, "", "", false, boundaryPathError(options.toolName, requested, err)
+	}
 	parentFD, descriptors, err := openWorkspaceParent(resolvedRoot, cleanPath, requested, workspaceParentOptions{
 		createParents: options.createParents,
 		allowMissing:  options.allowMissing,
 		toolName:      options.toolName,
+		expected:      expected,
 	})
 	if errors.Is(err, errWorkspaceFileMissing) && options.allowMissing {
 		return nil, target, cleanPath, false, nil
@@ -192,6 +203,12 @@ func openWorkspaceFileDescriptor(parentFD int, name, target string, options work
 	if err != nil {
 		return nil, err
 	}
+	if err := rejectHardLink(fileFD, options.toolName, name); err != nil {
+		if closeErr := unix.Close(fileFD); closeErr != nil {
+			return nil, fmt.Errorf("%v; closing file descriptor: %w", err, closeErr)
+		}
+		return nil, err
+	}
 	file := os.NewFile(uintptr(fileFD), target)
 	if file == nil {
 		if closeErr := unix.Close(fileFD); closeErr != nil {
@@ -202,16 +219,90 @@ func openWorkspaceFileDescriptor(parentFD int, name, target string, options work
 	return file, nil
 }
 
+func rejectHardLink(fileFD int, toolName, requested string) error {
+	var stat unix.Stat_t
+	if err := unix.Fstat(fileFD, &stat); err != nil {
+		return fmt.Errorf("%s: inspecting %q: %w", toolName, requested, err)
+	}
+	if stat.Mode&unix.S_IFMT == unix.S_IFREG && stat.Nlink > 1 {
+		return fmt.Errorf("%s: %q is a hard link and is outside the workspace boundary", toolName, requested)
+	}
+	return nil
+}
+
+func workspaceAncestorIdentities(root, cleanPath string) ([]workspaceIdentity, error) {
+	components := strings.Split(cleanPath, string(filepath.Separator))
+	identities := make([]workspaceIdentity, 0, len(components))
+	current := root
+	for index := -1; index < len(components)-1; index++ {
+		if index >= 0 {
+			current = filepath.Join(current, components[index])
+		}
+		identity, err := workspaceIdentityForPath(current)
+		if errors.Is(err, os.ErrNotExist) {
+			return identities, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		identities = append(identities, identity)
+	}
+	return identities, nil
+}
+
+func workspaceIdentityForPath(path string) (workspaceIdentity, error) {
+	var stat unix.Stat_t
+	if err := unix.Stat(path, &stat); err != nil {
+		return workspaceIdentity{}, err
+	}
+	return workspaceIdentity{device: stat.Dev, inode: stat.Ino}, nil
+}
+
+func workspaceIdentityForDescriptor(fd int) (workspaceIdentity, error) {
+	var stat unix.Stat_t
+	if err := unix.Fstat(fd, &stat); err != nil {
+		return workspaceIdentity{}, err
+	}
+	return workspaceIdentity{device: stat.Dev, inode: stat.Ino}, nil
+}
+
+func verifyWorkspaceIdentity(fd int, expected workspaceIdentity) error {
+	actual, err := workspaceIdentityForDescriptor(fd)
+	if err != nil {
+		return err
+	}
+	if actual != expected {
+		return errors.New("workspace path changed during resolution")
+	}
+	return nil
+}
+
 func openWorkspaceParent(root, cleanPath, requested string, options workspaceParentOptions) (int, []int, error) {
 	rootFD, err := unix.Open(root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
 		return 0, nil, fmt.Errorf("%s: opening workspace root: %w", options.toolName, err)
 	}
 	descriptors := []int{rootFD}
+	if len(options.expected) > 0 {
+		if err := verifyWorkspaceIdentity(rootFD, options.expected[0]); err != nil {
+			closeErr := closeDescriptors(descriptors)
+			if closeErr != nil {
+				return 0, nil, fmt.Errorf("%s: verifying workspace root: %v; closing: %w", options.toolName, err, closeErr)
+			}
+			return 0, nil, fmt.Errorf("%s: verifying workspace root: %w", options.toolName, err)
+		}
+	}
 	parentFD := rootFD
 	components := strings.Split(cleanPath, string(filepath.Separator))
-	for _, component := range components[:len(components)-1] {
+	for index, component := range components[:len(components)-1] {
 		nextFD, openErr := openWorkspaceDirectory(parentFD, component)
+		if index+1 >= len(options.expected) && openErr == nil {
+			closeErr := closeDescriptors(descriptors)
+			if closeErr != nil {
+				return 0, nil, fmt.Errorf("%s: verifying %q: workspace path changed during resolution; closing: %w", options.toolName, requested, closeErr)
+			}
+			return 0, nil, fmt.Errorf("%s: verifying %q: workspace path changed during resolution", options.toolName, requested)
+		}
 		if errors.Is(openErr, unix.ENOENT) && options.allowMissing && !options.createParents {
 			if closeErr := closeDescriptors(descriptors); closeErr != nil {
 				return 0, nil, fmt.Errorf("%s: resolving %q: %v; closing workspace path: %w", options.toolName, requested, openErr, closeErr)
@@ -219,10 +310,14 @@ func openWorkspaceParent(root, cleanPath, requested string, options workspacePar
 			return 0, nil, errWorkspaceFileMissing
 		}
 		if errors.Is(openErr, unix.ENOENT) && options.createParents {
-			if mkdirErr := unix.Mkdirat(parentFD, component, 0o755); mkdirErr != nil && !errors.Is(mkdirErr, unix.EEXIST) {
+			mkdirErr := unix.Mkdirat(parentFD, component, 0o755)
+			if mkdirErr != nil {
 				closeErr := closeDescriptors(descriptors)
 				if closeErr != nil {
 					return 0, nil, fmt.Errorf("%s: creating parent directories for %q: %v; closing workspace path: %w", options.toolName, requested, mkdirErr, closeErr)
+				}
+				if errors.Is(mkdirErr, unix.EEXIST) {
+					return 0, nil, fmt.Errorf("%s: verifying %q: workspace path changed during resolution", options.toolName, requested)
 				}
 				return 0, nil, fmt.Errorf("%s: creating parent directories for %q: %w", options.toolName, requested, mkdirErr)
 			}
@@ -236,6 +331,15 @@ func openWorkspaceParent(root, cleanPath, requested string, options workspacePar
 			return 0, nil, boundaryPathError(options.toolName, requested, openErr)
 		}
 		descriptors = append(descriptors, nextFD)
+		if len(descriptors)-1 < len(options.expected) {
+			if verifyErr := verifyWorkspaceIdentity(nextFD, options.expected[len(descriptors)-1]); verifyErr != nil {
+				closeErr := closeDescriptors(descriptors)
+				if closeErr != nil {
+					return 0, nil, fmt.Errorf("%s: verifying %q: %v; closing: %w", options.toolName, requested, verifyErr, closeErr)
+				}
+				return 0, nil, fmt.Errorf("%s: verifying %q: %w", options.toolName, requested, verifyErr)
+			}
+		}
 		parentFD = nextFD
 	}
 	return parentFD, descriptors, nil

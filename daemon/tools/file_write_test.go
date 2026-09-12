@@ -122,6 +122,35 @@ func TestFileWriteRejectsWorkspaceEscapesIncludingSymlinks(t *testing.T) {
 	}
 }
 
+func TestFileToolsRejectHardLinksToOutsideFiles(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	outsideFile := filepath.Join(outside, "secret.txt")
+	if err := os.WriteFile(outsideFile, []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "linked.txt")
+	if err := os.Link(outsideFile, link); err != nil {
+		t.Fatal(err)
+	}
+
+	reader, err := NewFileRead(root).Execute(context.Background(), json.RawMessage(`{"path":"linked.txt"}`))
+	if err == nil || (reader != nil && reader.Success) {
+		t.Fatalf("file_read = (%+v, %v), want hard-link rejection", reader, err)
+	}
+	writer, err := NewFileWrite(root).Execute(context.Background(), mustJSONWrite("linked.txt", "changed"))
+	if err == nil || writer == nil || writer.Success {
+		t.Fatalf("file_write = (%+v, %v), want hard-link rejection", writer, err)
+	}
+	contents, err := os.ReadFile(outsideFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != "secret" {
+		t.Fatalf("outside file contents = %q, want unchanged", contents)
+	}
+}
+
 func TestFileDiffRejectsSymlinkEscapes(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()
