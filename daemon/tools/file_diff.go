@@ -151,7 +151,12 @@ func splitDiffLines(content string) []string {
 	return lines
 }
 
+const maxDiffMatrixCells = 1_000_000
+
 func diffOperations(oldLines, newLines []string) []diffOperation {
+	if len(oldLines) == 0 || len(newLines) == 0 || len(oldLines) > maxDiffMatrixCells/len(newLines) {
+		return replacementOperations(oldLines, newLines)
+	}
 	rows := len(oldLines) + 1
 	cols := len(newLines) + 1
 	lcs := make([][]int, rows)
@@ -183,6 +188,17 @@ func diffOperations(oldLines, newLines []string) []diffOperation {
 			operations = append(operations, diffOperation{'-', oldLines[oldIndex]})
 			oldIndex++
 		}
+	}
+	return operations
+}
+
+func replacementOperations(oldLines, newLines []string) []diffOperation {
+	operations := make([]diffOperation, 0, len(oldLines)+len(newLines))
+	for _, line := range oldLines {
+		operations = append(operations, diffOperation{'-', line})
+	}
+	for _, line := range newLines {
+		operations = append(operations, diffOperation{'+', line})
 	}
 	return operations
 }

@@ -23,40 +23,95 @@ import (
 )
 
 func writeWorkspaceFile(root, requested, content string) (string, string, string, bool, error) {
-	_, _, _, existed, err := readWorkspaceFile(root, requested, "file_write", true)
+	previous, target, cleanPath, existed, err := readWorkspaceFile(root, requested, "file_write", true)
 	if err != nil {
 		return "", "", "", false, err
 	}
-	file, target, cleanPath, _, err := openWorkspaceFile(root, requested, workspaceOpenOptions{
-		createParents: true,
-		flags:         unix.O_RDWR | unix.O_CREAT | unix.O_CLOEXEC | unix.O_NOFOLLOW,
-		mode:          0o644,
+	resolvedRoot, err := resolvedWorkspaceRoot(root, "file_write")
+	if err != nil {
+		return "", "", "", false, err
+	}
+	parentFD, descriptors, name, err := openWorkspaceParentForTarget(resolvedRoot, cleanPath, requested, true)
+	if err != nil {
+		return "", "", "", false, err
+	}
+	tempFile, tempName, err := createWorkspaceTemp(parentFD, "file_write")
+	if err != nil {
+		closeErr := closeDescriptors(descriptors)
+		if closeErr != nil {
+			return "", "", "", false, fmt.Errorf("file_write: creating temporary file: %v; closing workspace path: %w", err, closeErr)
+		}
+		return "", "", "", false, err
+	}
+	if _, err = tempFile.WriteString(content); err != nil {
+		closeErr := tempFile.Close()
+		removeErr := unix.Unlinkat(parentFD, tempName, 0)
+		pathErr := closeDescriptors(descriptors)
+		return "", "", "", false, combineWorkspaceErrors("file_write: writing temporary file", err, closeErr, removeErr, pathErr)
+	}
+	if err = tempFile.Close(); err != nil {
+		removeErr := unix.Unlinkat(parentFD, tempName, 0)
+		pathErr := closeDescriptors(descriptors)
+		return "", "", "", false, combineWorkspaceErrors("file_write: closing temporary file", err, nil, removeErr, pathErr)
+	}
+	if err = unix.Renameat(parentFD, tempName, parentFD, name); err != nil {
+		removeErr := unix.Unlinkat(parentFD, tempName, 0)
+		pathErr := closeDescriptors(descriptors)
+		return "", "", "", false, combineWorkspaceErrors("file_write: replacing file", err, nil, removeErr, pathErr)
+	}
+	if err = closeDescriptors(descriptors); err != nil {
+		return "", "", "", false, fmt.Errorf("file_write: closing workspace path: %w", err)
+	}
+	return target, cleanPath, previous, existed, nil
+}
+
+func openWorkspaceParentForTarget(root, cleanPath, requested string, createParents bool) (int, []int, string, error) {
+	expected, err := workspaceAncestorIdentities(root, cleanPath)
+	if err != nil {
+		return 0, nil, "", boundaryPathError("file_write", requested, err)
+	}
+	parentFD, descriptors, err := openWorkspaceParent(root, cleanPath, requested, workspaceParentOptions{
+		createParents: createParents,
 		toolName:      "file_write",
+		expected:      expected,
 	})
 	if err != nil {
-		return "", "", "", false, err
+		return 0, nil, "", err
 	}
-	previous, err := io.ReadAll(file)
-	if err == nil {
-		_, err = file.Seek(0, io.SeekStart)
-	}
-	if err == nil {
-		err = file.Truncate(0)
-	}
-	if err == nil {
-		_, err = file.WriteString(content)
-	}
-	closeErr := file.Close()
-	if err != nil {
-		if closeErr != nil {
-			return "", "", "", false, fmt.Errorf("file_write: writing %q: %v; closing: %w", requested, err, closeErr)
+	components := strings.Split(cleanPath, string(filepath.Separator))
+	return parentFD, descriptors, components[len(components)-1], nil
+}
+
+func createWorkspaceTemp(parentFD int, toolName string) (*os.File, string, error) {
+	for index := 0; index < 100; index++ {
+		name := fmt.Sprintf(".mortise-%d-%d", os.Getpid(), index)
+		fd, err := unix.Openat(parentFD, name, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0o644)
+		if errors.Is(err, unix.EEXIST) {
+			continue
 		}
-		return "", "", "", false, fmt.Errorf("file_write: writing %q: %w", requested, err)
+		if err != nil {
+			return nil, "", fmt.Errorf("%s: creating temporary file: %w", toolName, err)
+		}
+		file := os.NewFile(uintptr(fd), name)
+		if file == nil {
+			if closeErr := unix.Close(fd); closeErr != nil {
+				return nil, "", fmt.Errorf("%s: closing temporary file: %w", toolName, closeErr)
+			}
+			return nil, "", fmt.Errorf("%s: creating temporary file returned an invalid file", toolName)
+		}
+		return file, name, nil
 	}
-	if closeErr != nil {
-		return "", "", "", false, fmt.Errorf("file_write: closing %q: %w", requested, closeErr)
+	return nil, "", fmt.Errorf("%s: creating temporary file: name space exhausted", toolName)
+}
+
+func combineWorkspaceErrors(operation string, operationErr, closeErr, removeErr, pathErr error) error {
+	errs := []error{fmt.Errorf("%s: %w", operation, operationErr)}
+	for _, err := range []error{closeErr, removeErr, pathErr} {
+		if err != nil {
+			errs = append(errs, err)
+		}
 	}
-	return target, cleanPath, string(previous), existed, nil
+	return errors.Join(errs...)
 }
 
 // readWorkspaceFile opens and reads a workspace file for tools that

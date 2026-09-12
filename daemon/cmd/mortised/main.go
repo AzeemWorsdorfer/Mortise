@@ -199,7 +199,11 @@ func run(parent context.Context, opts runOptions, logger *slog.Logger) error {
 	defer closeStore()
 
 	workspace := workspacePath()
-	sess, err := loadOrCreateSession(parent, store, workspace, cfg, logger)
+	sessionParent := parent
+	if sessionParent == nil {
+		sessionParent = context.Background()
+	}
+	sess, err := loadOrCreateSession(sessionParent, store, workspace, cfg, logger)
 	if err != nil {
 		return err
 	}

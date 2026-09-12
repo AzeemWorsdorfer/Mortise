@@ -236,6 +236,23 @@ func TestFileWriteUndoStackDefaultsAndCapsAtTenEntries(t *testing.T) {
 	}
 }
 
+func TestFileWriteLargeReplacementKeepsDiffBounded(t *testing.T) {
+	root := t.TempDir()
+	writer := NewFileWrite(root)
+	oldContent := strings.Repeat("old\n", 1500)
+	newContent := strings.Repeat("new\n", 1500)
+	if _, err := writer.Execute(context.Background(), mustJSONWrite("large.txt", oldContent)); err != nil {
+		t.Fatalf("initial write: %v", err)
+	}
+	res, err := writer.Execute(context.Background(), mustJSONWrite("large.txt", newContent))
+	if err != nil || !res.Success {
+		t.Fatalf("replacement = (%+v, %v), want success", res, err)
+	}
+	if res.Additions != 1500 || res.Deletions != 1500 {
+		t.Fatalf("diff stats = +%d -%d, want +1500 -1500", res.Additions, res.Deletions)
+	}
+}
+
 func TestFileWriteUnifiedDiffMarksMissingFinalNewlines(t *testing.T) {
 	tests := []struct {
 		name        string
