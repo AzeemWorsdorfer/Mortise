@@ -22,6 +22,27 @@ import (
 	"testing"
 )
 
+func TestFileHistoryNormalizesRelativeWorkspaceRoots(t *testing.T) {
+	root, err := os.MkdirTemp(".", ".history-relative-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(root) })
+	relativeRoot := root
+	writer := NewFileWrite(relativeRoot)
+	if _, err := writer.Execute(context.Background(), mustJSONWrite("file.txt", "written\n")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	differ := NewFileDiff(root, writer.History())
+	res, err := differ.Execute(context.Background(), json.RawMessage(`{"path":"file.txt"}`))
+	if err != nil || !res.Success {
+		t.Fatalf("file_diff = (%+v, %v), want success", res, err)
+	}
+	if !strings.Contains(res.Output, "+written") {
+		t.Fatalf("file_diff output = %q, want current contents", res.Output)
+	}
+}
+
 func TestFileWriteCreatesFileAndReturnsUnifiedDiff(t *testing.T) {
 	root := t.TempDir()
 	tool := NewFileWrite(root)

@@ -248,25 +248,33 @@ func openWorkspaceFile(root, requested string, options workspaceOpenOptions) (*o
 	if err != nil {
 		return nil, "", "", false, err
 	}
+	rootFD, rootIdentity, err := openWorkspaceRoot(resolvedRoot, options.toolName)
+	if err != nil {
+		return nil, "", "", false, err
+	}
 	cleanPath, err := cleanWorkspacePath(resolvedRoot, requested, options.toolName)
 	if err != nil {
+		unix.Close(rootFD)
 		return nil, "", "", false, err
 	}
 	cleanPath, target, err := resolveWorkspaceTarget(resolvedRoot, cleanPath, requested, options)
 	if err != nil {
+		unix.Close(rootFD)
 		return nil, "", "", false, err
 	}
 	components := strings.Split(cleanPath, string(filepath.Separator))
 	expected, err := workspaceAncestorIdentities(resolvedRoot, cleanPath)
 	if err != nil {
+		unix.Close(rootFD)
 		return nil, "", "", false, boundaryPathError(options.toolName, requested, err)
 	}
+	expected[0] = rootIdentity
 	parentFD, descriptors, err := openWorkspaceParent(resolvedRoot, cleanPath, requested, workspaceParentOptions{
 		createParents: options.createParents,
 		allowMissing:  options.allowMissing,
 		toolName:      options.toolName,
 		expected:      expected,
-		rootFD:        -1,
+		rootFD:        rootFD,
 	})
 	if errors.Is(err, errWorkspaceFileMissing) && options.allowMissing {
 		return nil, target, cleanPath, false, nil
@@ -432,6 +440,10 @@ func verifyWorkspaceIdentity(fd int, expected workspaceIdentity) error {
 }
 
 func openWorkspaceRoot(root, toolName string) (int, workspaceIdentity, error) {
+	expected, err := workspaceIdentityForPath(root)
+	if err != nil {
+		return 0, workspaceIdentity{}, fmt.Errorf("%s: inspecting workspace root: %w", toolName, err)
+	}
 	rootFD, err := unix.Open(root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
 		return 0, workspaceIdentity{}, fmt.Errorf("%s: opening workspace root: %w", toolName, err)
@@ -440,6 +452,10 @@ func openWorkspaceRoot(root, toolName string) (int, workspaceIdentity, error) {
 	if err != nil {
 		closeErr := unix.Close(rootFD)
 		return 0, workspaceIdentity{}, errors.Join(fmt.Errorf("%s: inspecting workspace root: %w", toolName, err), closeErr)
+	}
+	if identity != expected {
+		closeErr := unix.Close(rootFD)
+		return 0, workspaceIdentity{}, errors.Join(fmt.Errorf("%s: workspace root changed during resolution", toolName), closeErr)
 	}
 	return rootFD, identity, nil
 }

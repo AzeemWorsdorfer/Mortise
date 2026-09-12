@@ -67,6 +67,25 @@ func workspaceHistory(root string, stackSize int) *FileHistory {
 	return history
 }
 
+func historyTargetPath(root, target string) string {
+	canonicalRoot, err := filepath.Abs(root)
+	if err == nil {
+		if resolved, resolveErr := filepath.EvalSymlinks(canonicalRoot); resolveErr == nil {
+			canonicalRoot = resolved
+		}
+	}
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(canonicalRoot, target)
+	}
+	target, err = filepath.Abs(target)
+	if err == nil {
+		if resolved, resolveErr := filepath.EvalSymlinks(target); resolveErr == nil {
+			target = resolved
+		}
+	}
+	return filepath.Clean(target)
+}
+
 func (h *FileHistory) push(path, content string, exists bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()

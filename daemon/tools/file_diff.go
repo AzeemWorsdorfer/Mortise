@@ -75,7 +75,7 @@ func (f *FileDiff) Execute(ctx context.Context, params json.RawMessage) (*ToolRe
 	if err != nil {
 		return failedResult(err)
 	}
-	previous, previousExists, found := f.history.last(target)
+	previous, previousExists, found := f.history.last(historyTargetPath(f.workspaceRoot, target))
 	if !found {
 		previous = ""
 		previousExists = false

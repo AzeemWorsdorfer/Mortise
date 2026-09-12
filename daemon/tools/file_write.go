@@ -103,7 +103,7 @@ func (f *FileWrite) Execute(ctx context.Context, params json.RawMessage) (*ToolR
 	if err != nil {
 		return failedResult(err)
 	}
-	f.history.push(target, previous, exists)
+	f.history.push(historyTargetPath(f.workspaceRoot, target), previous, exists)
 	diff := unifiedDiff(displayPath, previous, *p.Content, exists)
 	additions, deletions := diffStats(previous, *p.Content)
 	return &ToolResult{

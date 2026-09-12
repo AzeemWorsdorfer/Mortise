@@ -376,7 +376,7 @@ func TestAgentLoop_SessionSummary_OnComplete(t *testing.T) {
 	provider := &stubProvider{
 		events: []ProviderEvent{
 			{Type: EventText, Text: "done"},
-			{Type: EventDone, Usage: &UsageInfo{InputTokens: 10, OutputTokens: 5}},
+			{Type: EventDone},
 		},
 	}
 	loop := NewAgentLoop(Options{

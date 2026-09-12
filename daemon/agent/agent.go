@@ -295,6 +295,7 @@ func (l *AgentLoop) processTurn(ctx context.Context, eventCh <-chan ProviderEven
 				// finished its stream without an explicit end
 				// marker. A tool call still requires a follow-up
 				// provider turn to observe its result.
+				l.accumulateUsage(turn, nil)
 				l.advanceAfterDone()
 				return !toolExecuted, nil
 			}
