@@ -37,6 +37,7 @@ type ConnectHandler struct {
 	// agentStarted tracks whether the agent loop has been kicked
 	// off. Only the first client triggers the demo run.
 	agentStarted atomic.Bool
+	agentOwner   atomic.Value
 }
 
 // Connect is the connect-go bidi-stream entry point.
@@ -54,8 +55,6 @@ func (h *ConnectHandler) Connect(
 
 	clientID := uuid.NewString()
 	subCh := bus.Subscribe(clientID)
-	defer bus.Unsubscribe(clientID)
-
 	// Start the drain goroutine BEFORE publishing the
 	// SystemStatus so the event is guaranteed to land on the
 	// stream. The 64-deep subscription buffer provides a safety
@@ -65,30 +64,36 @@ func (h *ConnectHandler) Connect(
 		defer close(drainDone)
 		for ev := range subCh {
 			if err := stream.Send(ev); err != nil {
-				// Best-effort: the stream is broken, the
-				// receive loop below will see EOF on its
-				// next Receive and exit, taking the defer
-				// unsubscribe with it.
+				bus.Unsubscribe(clientID)
+				h.cancelPendingApprovalsIfOwner(clientID)
 				return
 			}
 		}
+	}()
+	defer func() {
+		bus.Unsubscribe(clientID)
+		h.cancelPendingApprovalsIfOwner(clientID)
+		<-drainDone
 	}()
 
 	sessionID := h.sessionIDForLog()
 	h.logger.Info("client connected", "client_id", clientID, "session_id", sessionID)
 
 	// Publish the initial SystemStatus through the bus. The
-	// publish is non-blocking; on a saturated publish channel the
-	// event is dropped (and counted) but the next event will still
-	// flow. ConnectedClients is read from the bus at publish time
-	// so it reflects the count after this client subscribed.
-	bus.Publish(h.buildSystemStatus())
+	// The initial status is sent directly to this newly subscribed client
+	// so it cannot be lost behind unrelated producer traffic.
+	bus.PublishImmediate(h.buildSystemStatus())
 
 	// Start the agent loop on first client connect (demo mode).
 	// The loop runs with a mock provider so the TUI can render
 	// live phase transitions without any real API calls.
 	if h.agentStarted.CompareAndSwap(false, true) {
-		h.daemon.StartAgent(ctx, "read the project structure and run tests")
+		h.agentOwner.Store(clientID)
+		agentContext := h.daemon.agentContext
+		if agentContext == nil {
+			agentContext = context.Background()
+		}
+		h.daemon.StartAgent(agentContext, "read the project structure and run tests")
 	}
 
 	// Block reading commands until the client disconnects or the
@@ -108,12 +113,6 @@ func (h *ConnectHandler) Connect(
 		h.dispatchCommand(msg, sessionID)
 	}
 
-	// Trigger Unsubscribe via the defer; wait for the drain
-	// goroutine to exit so it cannot race with the unsubscribe
-	// on the bus's subscriber map. The drain goroutine will
-	// exit naturally when Unsubscribe closes subCh, but waiting
-	// here gives us a deterministic teardown for tests.
-	<-drainDone
 	return nil
 }
 
@@ -124,6 +123,14 @@ var errNoEventBus = errors.New("daemon: EventBus not initialized")
 // sessionIDForLog returns the daemon's current session ID for log
 // lines, or "<none>" when the daemon has not been wired to a session
 // (which should only happen in misconfigured tests).
+func (h *ConnectHandler) cancelPendingApprovalsIfOwner(clientID string) {
+	owner, _ := h.agentOwner.Load().(string)
+	if owner != clientID || h.daemon == nil || h.daemon.AgentLoop == nil {
+		return
+	}
+	h.daemon.AgentLoop.CancelPendingApprovals("approval stream disconnected")
+}
+
 func (h *ConnectHandler) sessionIDForLog() string {
 	if h.daemon == nil {
 		return "<none>"
@@ -196,8 +203,15 @@ func (h *ConnectHandler) dispatchCommand(cmd *mortisev1.ClientCommand, sessionID
 		h.logger.Info("received command", "session_id", sessionID, "command", "handoff", "reason", c.Handoff.GetReason())
 	case *mortisev1.ClientCommand_Approve:
 		h.logger.Info("received command", "session_id", sessionID, "command", "approve", "call_id", c.Approve.GetCallId())
+		if h.daemon.AgentLoop != nil {
+			h.daemon.AgentLoop.ApproveToolCall(c.Approve.GetCallId())
+		}
 	case *mortisev1.ClientCommand_Reject:
-		h.logger.Info("received command", "session_id", sessionID, "command", "reject", "call_id", c.Reject.GetCallId(), "reason", c.Reject.GetReason())
+		reason := c.Reject.GetReason()
+		h.logger.Info("received command", "session_id", sessionID, "command", "reject", "call_id", c.Reject.GetCallId(), "reason", reason)
+		if h.daemon.AgentLoop != nil {
+			h.daemon.AgentLoop.RejectToolCall(c.Reject.GetCallId(), reason)
+		}
 	}
 }
 

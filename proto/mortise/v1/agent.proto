@@ -64,6 +64,9 @@ message ToolCallPending {
   string parameters_json = 3;
   RiskLevel risk_level = 4;
   bool requires_approval = 5;
+  string diff_preview = 6;
+  int32 additions = 7;
+  int32 deletions = 8;
 }
 
 enum RiskLevel {
@@ -81,6 +84,9 @@ message ToolCallCompleted {
   int64 duration_ms = 5;
   UsageDelta usage = 6;
   string error_message = 7;
+  repeated string files_changed = 8;
+  int32 additions = 9;
+  int32 deletions = 10;
 }
 
 message UsageDelta {

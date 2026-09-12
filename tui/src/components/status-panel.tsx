@@ -31,6 +31,13 @@ import { TraceSession, type ToolCallEntry } from './trace-session.js';
 
 export type { ToolCallEntry };
 
+export interface FileChangeEntry {
+  path: string;
+  diff: string;
+  additions: number;
+  deletions: number;
+}
+
 export interface AppState {
   status: SystemStatus | null;
   phase: AgentPhase;
@@ -38,6 +45,7 @@ export interface AppState {
   thinkingLines: string[];
   textLines: string[];
   toolCalls: ToolCallEntry[];
+  filesChanged: FileChangeEntry[];
   summary: string | null;
   connectionState: ConnectionState;
 }
@@ -115,6 +123,31 @@ function formatPhaseHistory(history: PhaseTransitionEvent[]): string {
 // ---------------------------------------------------------------------------
 // Panel
 // ---------------------------------------------------------------------------
+
+interface FilesChangedPanelProps {
+  changes: FileChangeEntry[];
+}
+
+function FilesChangedPanel({ changes }: FilesChangedPanelProps): React.ReactElement {
+  return (
+    <Box borderStyle="single" paddingLeft={1} paddingRight={1} marginTop={1}>
+      <Box flexDirection="column">
+        <Text bold>FILES CHANGED</Text>
+        <Text dimColor>{'\u2500'.repeat(16)}</Text>
+        {changes.map((change) => (
+          <Box key={change.path} flexDirection="column">
+            <Text>
+              {`  M ${change.path} `}
+              <Text color="green">+{change.additions}</Text>{' '}
+              <Text color="red">-{change.deletions}</Text>
+            </Text>
+            {change.diff && <Text dimColor>{`    ${change.diff}`}</Text>}
+          </Box>
+        ))}
+      </Box>
+    </Box>
+  );
+}
 
 export function StatusPanel({ state }: { state: AppState }): React.ReactElement {
   const { status, phase, connectionState } = state;
@@ -206,6 +239,9 @@ export function StatusPanel({ state }: { state: AppState }): React.ReactElement 
 
       {/* ---- Trace Session (tool call timeline) ---- */}
       {state.toolCalls.length > 0 && <TraceSession entries={state.toolCalls} />}
+
+      {/* ---- Files changed ---- */}
+      {state.filesChanged.length > 0 && <FilesChangedPanel changes={state.filesChanged} />}
 
       {/* ---- Session summary ---- */}
       {state.summary && (

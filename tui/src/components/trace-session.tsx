@@ -28,6 +28,10 @@ export interface ToolCallEntry {
   parametersJson: string;
   status: 'pending' | 'completed' | 'failed';
   resultSummary?: string;
+  diffPreview?: string;
+  filesChanged?: string[];
+  additions?: number;
+  deletions?: number;
   durationMs?: number;
 }
 
@@ -105,7 +109,20 @@ export function TraceSession({ entries }: TraceSessionProps): React.ReactElement
               {'  Input:  '}
               <Text>{parseToolInput(tc.parametersJson)}</Text>
             </Text>
-            {tc.resultSummary && <Text dimColor>{'  Result: ' + tc.resultSummary}</Text>}
+            {tc.toolName === 'file_write' && (
+              <Text>
+                {'  Diff: '}
+                <Text color="green">+{tc.additions ?? 0}</Text>{' '}
+                <Text color="red">-{tc.deletions ?? 0}</Text>
+              </Text>
+            )}
+            {tc.diffPreview && <Text dimColor>{'  Preview: ' + tc.diffPreview}</Text>}
+            {tc.resultSummary && (
+              <Text dimColor>
+                {'  Result: '}
+                {tc.resultSummary}
+              </Text>
+            )}
             <Text>
               {'  Duration: '}
               {formatDuration(tc.durationMs) || '...'}{' '}

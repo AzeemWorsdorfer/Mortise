@@ -55,6 +55,14 @@ type Daemon struct {
 	// SystemStatus.branch. Empty string when not in a git repo.
 	Branch string
 
+	// UndoStackSize controls how many previous contents file_write keeps
+	// in memory for file_diff. Zero uses the default of ten.
+	UndoStackSize int
+
+	// ToolApproval contains per-tool policies. Only file_write confirm-mode
+	// handling is implemented here; other approval behavior is future work.
+	ToolApproval map[string]string
+
 	// Logger receives structured log lines. Required (use a no-op
 	// logger in tests that don't care).
 	Logger *slog.Logger
@@ -71,12 +79,27 @@ type Daemon struct {
 	// EventBus.Subscribe on connect.
 	EventBus *EventBus
 
+	// toolRegistry contains the built-in tools bound to Workspace. It is
+	// initialized by Serve and read through ToolRegistry.
+	toolRegistry   *tools.ToolRegistry
+	toolRegistryMu sync.RWMutex
+
 	// AgentLoop is the phase-aware state machine that drives the
 	// agent's Planning → Acting → Observing → Deciding cycle.
 	// Created by Serve from the daemon's EventBus. The handler
 	// starts the loop when the user submits a prompt (or, in
 	// demo mode, on first client connect with a mock provider).
 	AgentLoop *agent.AgentLoop
+
+	// AgentProvider overrides the demo provider when a caller needs to wire
+	// a real or test provider. A nil value uses the built-in mock provider.
+	AgentProvider agent.Provider
+
+	agentMu      sync.Mutex
+	agentRunning bool
+
+	// agentContext is the daemon-lifetime context used by the agent loop.
+	agentContext context.Context
 
 	// session is the in-memory reference to the current Session. It
 	// is set by main (or a test) after loading or creating the
@@ -104,6 +127,9 @@ func (d *Daemon) Session() *session.Session { return d.session }
 // until ctx is canceled. On exit it closes the listener (which
 // removes the socket file on Unix) and returns any HTTP-server error.
 func (d *Daemon) Serve(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if d.Listener == nil {
 		return errors.New("daemon: Listener is required")
 	}
@@ -111,13 +137,16 @@ func (d *Daemon) Serve(ctx context.Context) error {
 		return errors.New("daemon: Logger is required")
 	}
 	d.uptimeOnce.Do(func() { d.startedAt = time.Now() })
+	agentContext, cancelAgent := context.WithCancel(ctx)
+	defer cancelAgent()
+	d.agentContext = agentContext
 
 	// Spin up the EventBus and its fan-out goroutine. The bus is
 	// owned by the daemon and lives for the duration of Serve;
 	// shutdown() calls Close on it to release subscriber channels.
 	d.EventBus = NewEventBus()
 	d.EventBus.SetLogger(d.Logger.With("component", "eventbus"))
-	go d.EventBus.Run(ctx)
+	go d.EventBus.Run(agentContext)
 
 	// Wire up the AgentLoop with the EventBus as its publisher.
 	// The mock provider is used for demo purposes; real providers
@@ -132,13 +161,22 @@ func (d *Daemon) Serve(ctx context.Context) error {
 	}
 	registry := tools.NewRegistry()
 	registry.Register(tools.NewFileRead(workspace))
+	fileWrite := tools.NewFileWrite(workspace, d.UndoStackSize)
+	registry.Register(fileWrite)
+	registry.Register(tools.NewFileDiff(workspace, fileWrite.History()))
 
+	provider := d.AgentProvider
+	if provider == nil {
+		provider = agent.NewMockProvider(3)
+	}
 	d.AgentLoop = agent.NewAgentLoop(agent.Options{
-		Provider: agent.NewMockProvider(3),
-		Bus:      d.EventBus,
-		Tools:    registry,
-		Logger:   d.Logger.With("component", "agent_loop"),
+		Provider:     provider,
+		Bus:          d.EventBus,
+		Tools:        registry,
+		ToolApproval: d.ToolApproval,
+		Logger:       d.Logger.With("component", "agent_loop"),
 	})
+	d.setToolRegistry(registry)
 
 	mux := http.NewServeMux()
 	path, handler := mortisev1connect.NewAgentServiceHandler(&ConnectHandler{
@@ -168,8 +206,15 @@ func (d *Daemon) Serve(ctx context.Context) error {
 	case <-ctx.Done():
 		return d.shutdown(ctx, httpServer, errCh)
 	case err := <-errCh:
+		cancelAgent()
+		if d.EventBus != nil {
+			d.EventBus.Close()
+		}
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
+		}
+		if closeErr := d.Listener.Close(); closeErr != nil {
+			d.Logger.Warn("listener close after serve error", "err", closeErr)
 		}
 		if rmErr := os.Remove(d.SocketPath); rmErr != nil {
 			d.Logger.Warn("socket remove on serve error", "err", rmErr)
@@ -208,6 +253,21 @@ func (d *Daemon) shutdown(ctx context.Context, srv *http.Server, errCh <-chan er
 	return nil
 }
 
+// ToolRegistry returns the built-in tools bound to the daemon workspace,
+// or nil before Serve initializes them. The returned registry is safe for
+// concurrent lookup.
+func (d *Daemon) ToolRegistry() *tools.ToolRegistry {
+	d.toolRegistryMu.RLock()
+	defer d.toolRegistryMu.RUnlock()
+	return d.toolRegistry
+}
+
+func (d *Daemon) setToolRegistry(registry *tools.ToolRegistry) {
+	d.toolRegistryMu.Lock()
+	defer d.toolRegistryMu.Unlock()
+	d.toolRegistry = registry
+}
+
 // ConnectedClients returns the number of clients currently holding an
 // open Connect stream. The count is the EventBus's subscriber count;
 // the bus is the single source of truth for "how many clients are
@@ -236,7 +296,19 @@ func (d *Daemon) StartAgent(ctx context.Context, prompt string) {
 		d.Logger.Warn("StartAgent called but AgentLoop is nil")
 		return
 	}
+	d.agentMu.Lock()
+	if d.agentRunning {
+		d.agentMu.Unlock()
+		return
+	}
+	d.agentRunning = true
+	d.agentMu.Unlock()
 	go func() {
+		defer func() {
+			d.agentMu.Lock()
+			d.agentRunning = false
+			d.agentMu.Unlock()
+		}()
 		d.Logger.Info("agent loop started", "prompt", prompt)
 		if err := d.AgentLoop.Run(ctx, prompt); err != nil {
 			if !errors.Is(err, context.Canceled) {

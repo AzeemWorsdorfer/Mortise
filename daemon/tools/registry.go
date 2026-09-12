@@ -68,6 +68,16 @@ func (r *ToolRegistry) List() []ToolDefinition {
 	return defs
 }
 
+// ToolDefinitions returns the registered tool definitions as JSON for a
+// provider request.
+func (r *ToolRegistry) ToolDefinitions() (string, error) {
+	definitions, err := json.Marshal(r.List())
+	if err != nil {
+		return "", fmt.Errorf("tools: marshal tool definitions: %w", err)
+	}
+	return string(definitions), nil
+}
+
 // Execute looks up the named tool and runs it, measuring wall-clock
 // duration from just before execution to return. The returned
 // ToolResult.DurationMs reflects that measurement; an unknown tool

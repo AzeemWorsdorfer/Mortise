@@ -1,8 +1,12 @@
-// Package tools implements Mortise's Tool execution domain: the
-// Tool interface that all tools (built-in, custom, MCP) conform to,
-// the ToolRegistry that owns them, and the built-in tools.
+// tool.go — the Tool interface, ToolRegistry, and shared ToolResult.
 //
-// See: ticket 07 — Tool Interface, Registry & File Read.
+// Is NOT responsible for:
+//   - Individual tool behavior; the built-in file tools live in their
+//     own files (file_read.go, file_write.go, file_diff.go) and the
+//     workspace sandbox in workspace_*.go.
+//
+// See: docs/specs/01-core-agent-harness.md §3.3, tickets 07-08 —
+// Tool Interface, Registry & File Operations.
 package tools
 
 import (
@@ -38,11 +42,18 @@ type Tool interface {
 
 // ToolResult is the outcome of one tool execution. DurationMs is
 // measured by the ToolRegistry around Execute; individual tools do
-// not set it themselves.
+// not set it themselves. Additions and Deletions describe a
+// file diff when the tool produces one.
 type ToolResult struct {
 	Success      bool
 	Output       string
 	FilesChanged []string
+	Additions    int
+	Deletions    int
 	DurationMs   int64
 	Error        error
+}
+
+func failedResult(err error) (*ToolResult, error) {
+	return &ToolResult{Success: false, Error: err}, err
 }

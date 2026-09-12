@@ -95,8 +95,8 @@ export function createMockPhaseEvents(): ServerEvent[] {
     AgentPhase.ACTING,
     1,
     'call-1-0',
-    'file_read',
-    '{"path":"package.json"}',
+    'file_write',
+    '{"path":"src/main.go","content":"package main\n"}',
   );
   addToolCompleted(
     events,
@@ -104,10 +104,13 @@ export function createMockPhaseEvents(): ServerEvent[] {
     AgentPhase.ACTING,
     1,
     'call-1-0',
-    'file_read',
+    'file_write',
     true,
-    '{\n  "name": "mortise",\n  "version": "0.1.0",\n  ...',
+    '--- /dev/null\n+++ b/src/main.go\n@@ -0,0 +1 @@\n+package main',
     2,
+    ['src/main.go'],
+    1,
+    0,
   );
   addPhaseTransition(
     events,
@@ -221,8 +224,14 @@ function addToolPending(
           callId,
           toolName,
           parametersJson,
-          riskLevel: RiskLevel.SAFE,
+          riskLevel: toolName === 'file_write' ? RiskLevel.MODIFIES_FILES : RiskLevel.SAFE,
           requiresApproval: false,
+          diffPreview:
+            toolName === 'file_write'
+              ? '--- /dev/null\n+++ b/src/main.go\n@@ -0,0 +1 @@\n+package main'
+              : '',
+          additions: toolName === 'file_write' ? 1 : 0,
+          deletions: 0,
         }),
       },
     }),
@@ -239,6 +248,9 @@ function addToolCompleted(
   success: boolean,
   resultSummary: string,
   durationMs: number,
+  filesChanged: string[] = [],
+  additions = 0,
+  deletions = 0,
 ): void {
   events.push(
     new ServerEvent({
@@ -253,6 +265,9 @@ function addToolCompleted(
           success,
           resultSummary,
           durationMs: protoInt64.parse(durationMs),
+          filesChanged,
+          additions,
+          deletions,
         }),
       },
     }),

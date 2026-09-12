@@ -368,6 +368,21 @@ export class ToolCallPending extends Message<ToolCallPending> {
    */
   requiresApproval = false;
 
+  /**
+   * @generated from field: string diff_preview = 6;
+   */
+  diffPreview = "";
+
+  /**
+   * @generated from field: int32 additions = 7;
+   */
+  additions = 0;
+
+  /**
+   * @generated from field: int32 deletions = 8;
+   */
+  deletions = 0;
+
   constructor(data?: PartialMessage<ToolCallPending>) {
     super();
     proto3.util.initPartial(data, this);
@@ -381,6 +396,9 @@ export class ToolCallPending extends Message<ToolCallPending> {
     { no: 3, name: "parameters_json", kind: "scalar", T: 9 /* ScalarType.STRING */ },
     { no: 4, name: "risk_level", kind: "enum", T: proto3.getEnumType(RiskLevel) },
     { no: 5, name: "requires_approval", kind: "scalar", T: 8 /* ScalarType.BOOL */ },
+    { no: 6, name: "diff_preview", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 7, name: "additions", kind: "scalar", T: 5 /* ScalarType.INT32 */ },
+    { no: 8, name: "deletions", kind: "scalar", T: 5 /* ScalarType.INT32 */ },
   ]);
 
   static fromBinary(bytes: Uint8Array, options?: Partial<BinaryReadOptions>): ToolCallPending {
@@ -439,6 +457,21 @@ export class ToolCallCompleted extends Message<ToolCallCompleted> {
    */
   errorMessage = "";
 
+  /**
+   * @generated from field: repeated string files_changed = 8;
+   */
+  filesChanged: string[] = [];
+
+  /**
+   * @generated from field: int32 additions = 9;
+   */
+  additions = 0;
+
+  /**
+   * @generated from field: int32 deletions = 10;
+   */
+  deletions = 0;
+
   constructor(data?: PartialMessage<ToolCallCompleted>) {
     super();
     proto3.util.initPartial(data, this);
@@ -454,6 +487,9 @@ export class ToolCallCompleted extends Message<ToolCallCompleted> {
     { no: 5, name: "duration_ms", kind: "scalar", T: 3 /* ScalarType.INT64 */ },
     { no: 6, name: "usage", kind: "message", T: UsageDelta },
     { no: 7, name: "error_message", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 8, name: "files_changed", kind: "scalar", T: 9 /* ScalarType.STRING */, repeated: true },
+    { no: 9, name: "additions", kind: "scalar", T: 5 /* ScalarType.INT32 */ },
+    { no: 10, name: "deletions", kind: "scalar", T: 5 /* ScalarType.INT32 */ },
   ]);
 
   static fromBinary(bytes: Uint8Array, options?: Partial<BinaryReadOptions>): ToolCallCompleted {

@@ -7,6 +7,7 @@ package daemon
 import (
 	"context"
 	"crypto/tls"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"github.com/AzeemWorsdorfer/Mortise/daemon/agent"
 	mortisev1 "github.com/AzeemWorsdorfer/Mortise/daemon/gen/mortise/v1"
 	"github.com/AzeemWorsdorfer/Mortise/daemon/gen/mortise/v1/mortisev1connect"
 	"github.com/AzeemWorsdorfer/Mortise/daemon/session"
@@ -25,6 +27,40 @@ import (
 )
 
 const testWorkspace = "/tmp/mortise-handler-test-workspace"
+
+func TestDaemon_ServeRegistersFileTools(t *testing.T) {
+	sockPath := filepath.Join(shortTempDir(t), "x.sock")
+	d := newTestDaemon(t, sockPath, "m", "p", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- d.Serve(ctx) }()
+	waitForSocket(t, sockPath)
+	deadline := time.Now().Add(2 * time.Second)
+	registry := d.ToolRegistry()
+	for registry == nil && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+		registry = d.ToolRegistry()
+	}
+	if registry == nil {
+		t.Fatal("Serve did not initialize ToolRegistry")
+	}
+
+	for _, name := range []string{"file_read", "file_write", "file_diff"} {
+		if _, ok := registry.Get(name); !ok {
+			t.Errorf("ToolRegistry.Get(%q) = false, want registered tool", name)
+		}
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Serve returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Serve did not return after context cancel")
+	}
+}
 
 func TestHandler_Connect_SendsSystemStatus(t *testing.T) {
 	t.Parallel()
@@ -45,7 +81,11 @@ func TestHandler_Connect_SendsSystemStatus(t *testing.T) {
 		"http://unix",
 	)
 	stream := client.Connect(ctx)
-	defer func() { _ = stream.CloseRequest() }()
+	defer func() {
+		if err := stream.CloseRequest(); err != nil {
+			t.Logf("CloseRequest: %v", err)
+		}
+	}()
 
 	// For a bidi stream, the first Send (even with a nil body) opens
 	// the request. Without it, Receive blocks forever waiting for the
@@ -106,7 +146,11 @@ func TestHandler_Connect_LogsIncomingCommand(t *testing.T) {
 		"http://unix",
 	)
 	stream := client.Connect(ctx)
-	defer func() { _ = stream.CloseRequest() }()
+	defer func() {
+		if err := stream.CloseRequest(); err != nil {
+			t.Logf("CloseRequest: %v", err)
+		}
+	}()
 
 	if err := stream.Send(nil); err != nil {
 		t.Fatalf("open stream: %v", err)
@@ -139,11 +183,25 @@ func TestHandler_Connect_LogsIncomingCommand(t *testing.T) {
 	}
 }
 
+// idleProvider is a Provider whose SendPrompt returns a channel that
+// never yields events and never closes. The demo agent loop started on
+// first connect publishes only its IDLE→PLANNING transition and then
+// blocks, so no agent-loop events race with the fan-out assertions.
+type idleProvider struct{}
+
+func (idleProvider) SendPrompt(ctx context.Context, _ *agent.ProviderRequest) (<-chan agent.ProviderEvent, error) {
+	ch := make(chan agent.ProviderEvent)
+	return ch, nil
+}
+
+func (idleProvider) ProviderID() string { return "idle" }
+
 func TestHandler_Connect_MultiClientFanOut(t *testing.T) {
 	t.Parallel()
 
 	sockPath := filepath.Join(shortTempDir(t), "x.sock")
 	d := newTestDaemon(t, sockPath, "m", "p", slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	d.AgentProvider = idleProvider{}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -216,9 +274,17 @@ func TestHandler_Connect_MultiClientFanOut(t *testing.T) {
 	// event, or the test will read a stale SystemStatus instead of
 	// the PhaseTransitionEvent.
 	a := openStream(t)
-	defer func() { _ = a.CloseRequest() }()
+	defer func() {
+		if err := a.CloseRequest(); err != nil {
+			t.Logf("close stream a: %v", err)
+		}
+	}()
 	b := openStream(t)
-	defer func() { _ = b.CloseRequest() }()
+	defer func() {
+		if err := b.CloseRequest(); err != nil {
+			t.Logf("close stream b: %v", err)
+		}
+	}()
 
 	// A still has B's SystemStatus buffered; B has nothing.
 	drainStatus(t, "a (b's status)", a)
@@ -250,20 +316,31 @@ func TestHandler_Connect_MultiClientFanOut(t *testing.T) {
 			r, e := stream.Receive()
 			resCh <- result{resp: r, err: e}
 		}()
-		select {
-		case r := <-resCh:
-			if r.err != nil {
-				t.Fatalf("%s: Receive after publish: %v", label, r.err)
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			select {
+			case r := <-resCh:
+				if r.err != nil {
+					t.Fatalf("%s: Receive after publish: %v", label, r.err)
+				}
+				// Skip stray demo-loop events (e.g. the demo
+				// agent's IDLE→PLANNING transition) so the
+				// assertion targets the published event only.
+				if pc := r.resp.GetPhaseChange(); pc != nil && pc.GetReason() == "test fan-out" {
+					return pc
+				}
+				resCh = make(chan result, 1)
+				go func() {
+					r, e := stream.Receive()
+					resCh <- result{resp: r, err: e}
+				}()
+			case <-time.After(2 * time.Second):
+				t.Fatalf("%s: did not receive published PhaseTransitionEvent within 2s", label)
+				return nil
 			}
-			pc := r.resp.GetPhaseChange()
-			if pc == nil {
-				t.Fatalf("%s: want PhaseTransitionEvent, got %+v", label, r.resp)
-			}
-			return pc
-		case <-time.After(2 * time.Second):
-			t.Fatalf("%s: did not receive published PhaseTransitionEvent within 2s", label)
-			return nil
 		}
+		t.Fatalf("%s: deadline exceeded waiting for PhaseTransitionEvent", label)
+		return nil
 	}
 	if pc := got("a", a); pc.GetReason() != "test fan-out" {
 		t.Errorf("a: reason: want %q, got %q", "test fan-out", pc.GetReason())
@@ -317,7 +394,11 @@ func newTestDaemon(t *testing.T, sockPath, model, provider string, logger *slog.
 	if err != nil {
 		t.Fatalf("session.Open: %v", err)
 	}
-	t.Cleanup(func() { _ = store.Close() })
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("store.Close: %v", err)
+		}
+	})
 
 	now := time.Now().UTC().Truncate(time.Second)
 	sess := &session.Session{

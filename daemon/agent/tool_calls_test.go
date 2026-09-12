@@ -61,6 +61,27 @@ func TestAgentLoop_ToolReportingFailureWithoutError(t *testing.T) {
 	}
 }
 
+func TestAgentLoop_DuplicateApprovalResolutionDoesNotBlock(t *testing.T) {
+	loop := NewAgentLoop(Options{})
+	loop.approvalMu.Lock()
+	loop.pendingApprovals["call-1"] = make(chan approvalDecision, 1)
+	loop.approvalMu.Unlock()
+
+	if !loop.ApproveToolCall("call-1") {
+		t.Fatal("first approval returned false")
+	}
+	result := make(chan bool, 1)
+	go func() { result <- loop.ApproveToolCall("call-1") }()
+	select {
+	case got := <-result:
+		if got {
+			t.Fatal("duplicate approval returned true")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("duplicate approval blocked")
+	}
+}
+
 func TestTruncateResultSummary(t *testing.T) {
 	tests := []struct {
 		name  string

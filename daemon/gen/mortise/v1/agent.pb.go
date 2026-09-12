@@ -493,6 +493,9 @@ type ToolCallPending struct {
 	ParametersJson   string                 `protobuf:"bytes,3,opt,name=parameters_json,json=parametersJson,proto3" json:"parameters_json,omitempty"`
 	RiskLevel        RiskLevel              `protobuf:"varint,4,opt,name=risk_level,json=riskLevel,proto3,enum=mortise.v1.RiskLevel" json:"risk_level,omitempty"`
 	RequiresApproval bool                   `protobuf:"varint,5,opt,name=requires_approval,json=requiresApproval,proto3" json:"requires_approval,omitempty"`
+	DiffPreview      string                 `protobuf:"bytes,6,opt,name=diff_preview,json=diffPreview,proto3" json:"diff_preview,omitempty"`
+	Additions        int32                  `protobuf:"varint,7,opt,name=additions,proto3" json:"additions,omitempty"`
+	Deletions        int32                  `protobuf:"varint,8,opt,name=deletions,proto3" json:"deletions,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -562,6 +565,27 @@ func (x *ToolCallPending) GetRequiresApproval() bool {
 	return false
 }
 
+func (x *ToolCallPending) GetDiffPreview() string {
+	if x != nil {
+		return x.DiffPreview
+	}
+	return ""
+}
+
+func (x *ToolCallPending) GetAdditions() int32 {
+	if x != nil {
+		return x.Additions
+	}
+	return 0
+}
+
+func (x *ToolCallPending) GetDeletions() int32 {
+	if x != nil {
+		return x.Deletions
+	}
+	return 0
+}
+
 type ToolCallCompleted struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	CallId        string                 `protobuf:"bytes,1,opt,name=call_id,json=callId,proto3" json:"call_id,omitempty"`
@@ -571,6 +595,9 @@ type ToolCallCompleted struct {
 	DurationMs    int64                  `protobuf:"varint,5,opt,name=duration_ms,json=durationMs,proto3" json:"duration_ms,omitempty"`
 	Usage         *UsageDelta            `protobuf:"bytes,6,opt,name=usage,proto3" json:"usage,omitempty"`
 	ErrorMessage  string                 `protobuf:"bytes,7,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	FilesChanged  []string               `protobuf:"bytes,8,rep,name=files_changed,json=filesChanged,proto3" json:"files_changed,omitempty"`
+	Additions     int32                  `protobuf:"varint,9,opt,name=additions,proto3" json:"additions,omitempty"`
+	Deletions     int32                  `protobuf:"varint,10,opt,name=deletions,proto3" json:"deletions,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -652,6 +679,27 @@ func (x *ToolCallCompleted) GetErrorMessage() string {
 		return x.ErrorMessage
 	}
 	return ""
+}
+
+func (x *ToolCallCompleted) GetFilesChanged() []string {
+	if x != nil {
+		return x.FilesChanged
+	}
+	return nil
+}
+
+func (x *ToolCallCompleted) GetAdditions() int32 {
+	if x != nil {
+		return x.Additions
+	}
+	return 0
+}
+
+func (x *ToolCallCompleted) GetDeletions() int32 {
+	if x != nil {
+		return x.Deletions
+	}
+	return 0
 }
 
 type UsageDelta struct {
@@ -1429,14 +1477,17 @@ const file_mortise_v1_agent_proto_rawDesc = "" +
 	"\rThinkingChunk\x12\x12\n" +
 	"\x04text\x18\x01 \x01(\tR\x04text\"\x1f\n" +
 	"\tAgentText\x12\x12\n" +
-	"\x04text\x18\x01 \x01(\tR\x04text\"\xd3\x01\n" +
+	"\x04text\x18\x01 \x01(\tR\x04text\"\xb2\x02\n" +
 	"\x0fToolCallPending\x12\x17\n" +
 	"\acall_id\x18\x01 \x01(\tR\x06callId\x12\x1b\n" +
 	"\ttool_name\x18\x02 \x01(\tR\btoolName\x12'\n" +
 	"\x0fparameters_json\x18\x03 \x01(\tR\x0eparametersJson\x124\n" +
 	"\n" +
 	"risk_level\x18\x04 \x01(\x0e2\x15.mortise.v1.RiskLevelR\triskLevel\x12+\n" +
-	"\x11requires_approval\x18\x05 \x01(\bR\x10requiresApproval\"\xfe\x01\n" +
+	"\x11requires_approval\x18\x05 \x01(\bR\x10requiresApproval\x12!\n" +
+	"\fdiff_preview\x18\x06 \x01(\tR\vdiffPreview\x12\x1c\n" +
+	"\tadditions\x18\a \x01(\x05R\tadditions\x12\x1c\n" +
+	"\tdeletions\x18\b \x01(\x05R\tdeletions\"\xdf\x02\n" +
 	"\x11ToolCallCompleted\x12\x17\n" +
 	"\acall_id\x18\x01 \x01(\tR\x06callId\x12\x1b\n" +
 	"\ttool_name\x18\x02 \x01(\tR\btoolName\x12\x18\n" +
@@ -1445,7 +1496,11 @@ const file_mortise_v1_agent_proto_rawDesc = "" +
 	"\vduration_ms\x18\x05 \x01(\x03R\n" +
 	"durationMs\x12,\n" +
 	"\x05usage\x18\x06 \x01(\v2\x16.mortise.v1.UsageDeltaR\x05usage\x12#\n" +
-	"\rerror_message\x18\a \x01(\tR\ferrorMessage\"\x92\x01\n" +
+	"\rerror_message\x18\a \x01(\tR\ferrorMessage\x12#\n" +
+	"\rfiles_changed\x18\b \x03(\tR\ffilesChanged\x12\x1c\n" +
+	"\tadditions\x18\t \x01(\x05R\tadditions\x12\x1c\n" +
+	"\tdeletions\x18\n" +
+	" \x01(\x05R\tdeletions\"\x92\x01\n" +
 	"\n" +
 	"UsageDelta\x12!\n" +
 	"\finput_tokens\x18\x01 \x01(\x05R\vinputTokens\x12#\n" +

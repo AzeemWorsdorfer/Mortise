@@ -110,6 +110,12 @@ func (b *EventBus) SetLogger(l *slog.Logger) {
 // is closed) so the handler can safely re-subscribe on reconnect.
 func (b *EventBus) Subscribe(clientID string) <-chan *mortisev1.ServerEvent {
 	ch := make(chan *mortisev1.ServerEvent, subscriberBufferSize)
+	b.closeMu.Lock()
+	if b.closed {
+		b.closeMu.Unlock()
+		close(ch)
+		return ch
+	}
 	b.mu.Lock()
 	if old, ok := b.subscribers[clientID]; ok {
 		// Replace: close the old channel so its receiver
@@ -119,6 +125,7 @@ func (b *EventBus) Subscribe(clientID string) <-chan *mortisev1.ServerEvent {
 	}
 	b.subscribers[clientID] = ch
 	b.mu.Unlock()
+	b.closeMu.Unlock()
 	return ch
 }
 
@@ -164,6 +171,38 @@ func (b *EventBus) Publish(event *mortisev1.ServerEvent) {
 			"drops_total", d,
 		)
 	}
+}
+
+// PublishImmediate delivers an event directly to current subscribers and
+// reports whether at least one subscriber received it.
+func (b *EventBus) PublishImmediate(event *mortisev1.ServerEvent) bool {
+	if event == nil {
+		return false
+	}
+	b.closeMu.Lock()
+	if b.closed {
+		b.closeMu.Unlock()
+		return false
+	}
+	b.closeMu.Unlock()
+
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	delivered := false
+	for _, ch := range b.subscribers {
+		select {
+		case ch <- event:
+			delivered = true
+		default:
+		}
+	}
+	return delivered
+}
+
+// PublishApproval delivers an approval event directly to subscribers and
+// reports whether at least one subscriber received it.
+func (b *EventBus) PublishApproval(event *mortisev1.ServerEvent) bool {
+	return b.PublishImmediate(event)
 }
 
 // Run is the fan-out loop. It reads events from publishCh,

@@ -49,16 +49,24 @@ type AgentLoop struct {
 	// mu: sendTurn reads it from the run goroutine while a future
 	// pause/resume path may mutate concurrently.
 	toolOutcomes []ToolOutcome
+
+	// approvalRules and pendingApprovals implement the narrow confirm-mode
+	// gate for file_write. The map is guarded separately because approvals
+	// may arrive from the daemon command handler while Run waits.
+	approvalMu       sync.Mutex
+	approvalRules    map[string]string
+	pendingApprovals map[string]chan approvalDecision
 }
 
 // Options configures a new AgentLoop. All fields are optional; a
 // zero-value loop starts in IDLE with no provider or bus (useful
 // only for testing the phase machine).
 type Options struct {
-	Provider Provider
-	Bus      EventPublisher
-	Tools    ToolExecutor
-	Logger   *slog.Logger
+	Provider     Provider
+	Bus          EventPublisher
+	Tools        ToolExecutor
+	ToolApproval map[string]string
+	Logger       *slog.Logger
 }
 
 // NewAgentLoop constructs a fresh AgentLoop in the IDLE phase.
@@ -68,12 +76,71 @@ func NewAgentLoop(opts Options) *AgentLoop {
 		logger = slog.Default()
 	}
 	return &AgentLoop{
-		phase:    mortisev1.AgentPhase_IDLE,
-		provider: opts.Provider,
-		bus:      opts.Bus,
-		tools:    opts.Tools,
-		logger:   logger,
+		phase:            mortisev1.AgentPhase_IDLE,
+		provider:         opts.Provider,
+		bus:              opts.Bus,
+		tools:            opts.Tools,
+		approvalRules:    cloneApprovalRules(opts.ToolApproval),
+		pendingApprovals: make(map[string]chan approvalDecision),
+		logger:           logger,
 	}
+}
+
+// ApproveToolCall releases a pending confirm-mode file_write call. It
+// returns false when callID is not waiting for approval.
+func (l *AgentLoop) ApproveToolCall(callID string) bool {
+	return l.resolveApproval(callID, approvalDecision{approved: true})
+}
+
+// RejectToolCall rejects a pending confirm-mode file_write call. The reason
+// is returned to the agent as a failed tool result.
+func (l *AgentLoop) RejectToolCall(callID, reason string) bool {
+	if reason == "" {
+		reason = "tool call rejected"
+	}
+	return l.resolveApproval(callID, approvalDecision{reason: reason})
+}
+
+// CancelPendingApprovals rejects every approval still waiting for a decision.
+func (l *AgentLoop) CancelPendingApprovals(reason string) {
+	if reason == "" {
+		reason = "tool call rejected"
+	}
+	l.approvalMu.Lock()
+	defer l.approvalMu.Unlock()
+	for _, channel := range l.pendingApprovals {
+		select {
+		case channel <- approvalDecision{reason: reason}:
+		default:
+		}
+	}
+}
+
+func cloneApprovalRules(rules map[string]string) map[string]string {
+	cloned := make(map[string]string, len(rules))
+	for name, policy := range rules {
+		cloned[name] = policy
+	}
+	return cloned
+}
+
+type approvalDecision struct {
+	approved bool
+	reason   string
+}
+
+func (l *AgentLoop) resolveApproval(callID string, decision approvalDecision) bool {
+	l.approvalMu.Lock()
+	channel, ok := l.pendingApprovals[callID]
+	if ok {
+		select {
+		case channel <- decision:
+		default:
+			ok = false
+		}
+	}
+	l.approvalMu.Unlock()
+	return ok
 }
 
 // Phase returns the current agent phase. Safe to call from any
@@ -135,6 +202,10 @@ func (l *AgentLoop) Run(ctx context.Context, userPrompt string) error {
 		if turnDone {
 			break
 		}
+		// The turn executed a tool, so the provider must observe the
+		// outcome before the run can end. Re-enter the cycle through
+		// the state machine's DECIDING → PLANNING edge.
+		l.transitionWithReport(mortisev1.AgentPhase_PLANNING, "continue after tool results")
 	}
 
 	l.complete()
@@ -173,11 +244,18 @@ func (l *AgentLoop) sendTurn(ctx context.Context, turn int32, userPrompt string)
 		req.ToolResults = append([]ToolOutcome{}, l.toolOutcomes...)
 	}
 	l.mu.Unlock()
+	if provider, ok := l.tools.(toolDefinitionProvider); ok {
+		definitions, err := provider.ToolDefinitions()
+		if err != nil {
+			return nil, fmt.Errorf("agent: tool definitions: %w", err)
+		}
+		req.ToolDefinitions = definitions
+	}
 
 	eventCh, err := l.provider.SendPrompt(ctx, req)
 	if err != nil {
 		l.logger.Warn("provider send failed", "err", err, "turn", turn)
-		_ = l.transitionTo(mortisev1.AgentPhase_ERRORED, "provider error")
+		l.transitionWithReport(mortisev1.AgentPhase_ERRORED, "provider error")
 		return nil, fmt.Errorf("agent: provider send: %w", err)
 	}
 	return eventCh, nil
@@ -221,8 +299,10 @@ func (l *AgentLoop) emitSummary() {
 // processTurn reads the provider's event channel for one turn,
 // translating each ProviderEvent into ServerEvents and publishing
 // them through the bus. It returns (done, error) — done is true
-// when the model signals completion.
+// when the turn ended without executing a tool, so the provider has
+// nothing new to observe and the run may complete.
 func (l *AgentLoop) processTurn(ctx context.Context, eventCh <-chan ProviderEvent, turn int32) (bool, error) {
+	toolExecuted := false
 	for {
 		select {
 		case <-ctx.Done():
@@ -230,15 +310,22 @@ func (l *AgentLoop) processTurn(ctx context.Context, eventCh <-chan ProviderEven
 		case ev, ok := <-eventCh:
 			if !ok {
 				// Channel closed without EventDone — the provider
-				// is done but didn't signal explicitly. Treat as
-				// completion.
-				_ = l.transitionTo(mortisev1.AgentPhase_OBSERVING, "evaluating results")
-				_ = l.transitionTo(mortisev1.AgentPhase_DECIDING, "evaluating results")
-				return true, nil
+				// finished its stream without an explicit end
+				// marker. A tool call still requires a follow-up
+				// provider turn to observe its result.
+				l.accumulateUsage(turn, nil)
+				l.advanceAfterDone()
+				return !toolExecuted, nil
+			}
+			if ev.Type == EventToolCall {
+				toolExecuted = true
 			}
 			done, err := l.handleProviderEvent(ctx, ev, turn)
-			if err != nil || done {
-				return done, err
+			if err != nil {
+				return false, err
+			}
+			if done {
+				return !toolExecuted, nil
 			}
 		}
 	}
@@ -296,14 +383,13 @@ func (l *AgentLoop) handleDone(turn int32, ev ProviderEvent) {
 // accumulateUsage folds the turn's token/cost accounting into the
 // loop totals.
 func (l *AgentLoop) accumulateUsage(turn int32, usage *UsageInfo) {
-	if usage == nil {
-		return
-	}
 	l.mu.Lock()
-	l.totalTokens += usage.InputTokens + usage.OutputTokens
-	l.totalCost += usage.CostUSD
+	defer l.mu.Unlock()
+	if usage != nil {
+		l.totalTokens += usage.InputTokens + usage.OutputTokens
+		l.totalCost += usage.CostUSD
+	}
 	l.totalTurns = turn
-	l.mu.Unlock()
 }
 
 // advanceAfterDone moves the loop from the phase the turn ended in
@@ -319,14 +405,14 @@ func (l *AgentLoop) advanceAfterDone() {
 
 	switch currentPhase {
 	case mortisev1.AgentPhase_PLANNING:
-		_ = l.transitionTo(mortisev1.AgentPhase_DECIDING, "evaluating results")
+		l.transitionWithReport(mortisev1.AgentPhase_DECIDING, "evaluating results")
 	case mortisev1.AgentPhase_ACTING:
-		_ = l.transitionTo(mortisev1.AgentPhase_OBSERVING, "tool executed")
-		_ = l.transitionTo(mortisev1.AgentPhase_DECIDING, "evaluating results")
+		l.transitionWithReport(mortisev1.AgentPhase_OBSERVING, "tool executed")
+		l.transitionWithReport(mortisev1.AgentPhase_DECIDING, "evaluating results")
 	case mortisev1.AgentPhase_OBSERVING:
-		_ = l.transitionTo(mortisev1.AgentPhase_DECIDING, "evaluating results")
+		l.transitionWithReport(mortisev1.AgentPhase_DECIDING, "evaluating results")
 	default:
-		_ = l.transitionTo(mortisev1.AgentPhase_DECIDING, "evaluating results")
+		l.transitionWithReport(mortisev1.AgentPhase_DECIDING, "evaluating results")
 	}
 }
 
@@ -345,6 +431,12 @@ var ErrInvalidPhaseTransition = errors.New("agent: invalid phase transition")
 // transition, the phase is left unchanged and
 // ErrInvalidPhaseTransition is returned (wrapped with the
 // from/to/reason for diagnostic logging).
+func (l *AgentLoop) transitionWithReport(newPhase mortisev1.AgentPhase, reason string) {
+	if err := l.transitionTo(newPhase, reason); err != nil {
+		l.logger.Warn("agent phase transition failed", "err", err)
+	}
+}
+
 func (l *AgentLoop) transitionTo(newPhase mortisev1.AgentPhase, reason string) error {
 	l.mu.Lock()
 	from := l.phase
