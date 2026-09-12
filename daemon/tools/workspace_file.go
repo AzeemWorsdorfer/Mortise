@@ -76,12 +76,17 @@ func writeWorkspaceFile(root, requested, content string) (string, string, string
 }
 
 func openWorkspaceWriteTarget(root, requested string) (workspaceWriteTarget, error) {
-	resolvedRoot, err := resolvedWorkspaceRoot(root, "file_write")
+	rootFD, rootIdentity, err := openWorkspaceRoot(root, "file_write")
 	if err != nil {
 		return workspaceWriteTarget{}, err
 	}
-	rootFD, rootIdentity, err := openWorkspaceRoot(resolvedRoot, "file_write")
+	resolvedRoot, err := resolvedWorkspaceRoot(root, "file_write")
 	if err != nil {
+		unix.Close(rootFD)
+		return workspaceWriteTarget{}, err
+	}
+	if err := verifyWorkspacePathIdentity(resolvedRoot, rootIdentity); err != nil {
+		unix.Close(rootFD)
 		return workspaceWriteTarget{}, err
 	}
 	cleanPath, err := cleanWorkspacePath(resolvedRoot, requested, "file_write")
@@ -244,12 +249,17 @@ type workspaceIdentity struct {
 var errWorkspaceFileMissing = errors.New("workspace file missing")
 
 func openWorkspaceFile(root, requested string, options workspaceOpenOptions) (*os.File, string, string, bool, error) {
-	resolvedRoot, err := resolvedWorkspaceRoot(root, options.toolName)
+	rootFD, rootIdentity, err := openWorkspaceRoot(root, options.toolName)
 	if err != nil {
 		return nil, "", "", false, err
 	}
-	rootFD, rootIdentity, err := openWorkspaceRoot(resolvedRoot, options.toolName)
+	resolvedRoot, err := resolvedWorkspaceRoot(root, options.toolName)
 	if err != nil {
+		unix.Close(rootFD)
+		return nil, "", "", false, err
+	}
+	if err := verifyWorkspacePathIdentity(resolvedRoot, rootIdentity); err != nil {
+		unix.Close(rootFD)
 		return nil, "", "", false, err
 	}
 	cleanPath, err := cleanWorkspacePath(resolvedRoot, requested, options.toolName)
@@ -420,6 +430,17 @@ func workspaceIdentityForPath(path string) (workspaceIdentity, error) {
 	return workspaceIdentity{device: stat.Dev, inode: stat.Ino}, nil
 }
 
+func verifyWorkspacePathIdentity(path string, expected workspaceIdentity) error {
+	actual, err := workspaceIdentityForPath(path)
+	if err != nil {
+		return fmt.Errorf("workspace root changed during resolution: %w", err)
+	}
+	if actual != expected {
+		return errors.New("workspace root changed during resolution")
+	}
+	return nil
+}
+
 func workspaceIdentityForDescriptor(fd int) (workspaceIdentity, error) {
 	var stat unix.Stat_t
 	if err := unix.Fstat(fd, &stat); err != nil {
@@ -440,11 +461,7 @@ func verifyWorkspaceIdentity(fd int, expected workspaceIdentity) error {
 }
 
 func openWorkspaceRoot(root, toolName string) (int, workspaceIdentity, error) {
-	expected, err := workspaceIdentityForPath(root)
-	if err != nil {
-		return 0, workspaceIdentity{}, fmt.Errorf("%s: inspecting workspace root: %w", toolName, err)
-	}
-	rootFD, err := unix.Open(root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	rootFD, err := unix.Open(root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return 0, workspaceIdentity{}, fmt.Errorf("%s: opening workspace root: %w", toolName, err)
 	}
@@ -452,10 +469,6 @@ func openWorkspaceRoot(root, toolName string) (int, workspaceIdentity, error) {
 	if err != nil {
 		closeErr := unix.Close(rootFD)
 		return 0, workspaceIdentity{}, errors.Join(fmt.Errorf("%s: inspecting workspace root: %w", toolName, err), closeErr)
-	}
-	if identity != expected {
-		closeErr := unix.Close(rootFD)
-		return 0, workspaceIdentity{}, errors.Join(fmt.Errorf("%s: workspace root changed during resolution", toolName), closeErr)
 	}
 	return rootFD, identity, nil
 }

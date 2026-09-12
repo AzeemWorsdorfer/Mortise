@@ -67,21 +67,12 @@ func workspaceHistory(root string, stackSize int) *FileHistory {
 	return history
 }
 
-func historyTargetPath(root, target string) string {
-	canonicalRoot, err := filepath.Abs(root)
-	if err == nil {
-		if resolved, resolveErr := filepath.EvalSymlinks(canonicalRoot); resolveErr == nil {
-			canonicalRoot = resolved
-		}
+func historyTargetPath(_ string, target string) string {
+	if absolute, err := filepath.Abs(target); err == nil {
+		target = absolute
 	}
-	if !filepath.IsAbs(target) {
-		target = filepath.Join(canonicalRoot, target)
-	}
-	target, err = filepath.Abs(target)
-	if err == nil {
-		if resolved, resolveErr := filepath.EvalSymlinks(target); resolveErr == nil {
-			target = resolved
-		}
+	if resolved, err := filepath.EvalSymlinks(target); err == nil {
+		target = resolved
 	}
 	return filepath.Clean(target)
 }
