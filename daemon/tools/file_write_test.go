@@ -122,6 +122,24 @@ func TestFileWriteRejectsWorkspaceEscapesIncludingSymlinks(t *testing.T) {
 	}
 }
 
+func TestFileWritePreservesExistingMode(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "private.txt")
+	if err := os.WriteFile(path, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewFileWrite(root).Execute(context.Background(), mustJSONWrite("private.txt", "updated")); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Errorf("mode = %o, want 600", got)
+	}
+}
+
 func TestFileToolsRejectHardLinksToOutsideFiles(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()
@@ -243,6 +261,10 @@ func TestFileWriteLargeReplacementKeepsDiffBounded(t *testing.T) {
 	newContent := strings.Repeat("new\n", 1500)
 	if _, err := writer.Execute(context.Background(), mustJSONWrite("large.txt", oldContent)); err != nil {
 		t.Fatalf("initial write: %v", err)
+	}
+	same, err := writer.Execute(context.Background(), mustJSONWrite("large.txt", oldContent))
+	if err != nil || !same.Success || same.Additions != 0 || same.Deletions != 0 || same.Output != "" {
+		t.Fatalf("identical replacement = (%+v, %v), want empty diff", same, err)
 	}
 	res, err := writer.Execute(context.Background(), mustJSONWrite("large.txt", newContent))
 	if err != nil || !res.Success {

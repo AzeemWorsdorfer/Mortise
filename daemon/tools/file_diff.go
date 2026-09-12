@@ -193,12 +193,26 @@ func diffOperations(oldLines, newLines []string) []diffOperation {
 }
 
 func replacementOperations(oldLines, newLines []string) []diffOperation {
+	prefix := 0
+	for prefix < len(oldLines) && prefix < len(newLines) && oldLines[prefix] == newLines[prefix] {
+		prefix++
+	}
+	suffix := 0
+	for suffix < len(oldLines)-prefix && suffix < len(newLines)-prefix && oldLines[len(oldLines)-suffix-1] == newLines[len(newLines)-suffix-1] {
+		suffix++
+	}
 	operations := make([]diffOperation, 0, len(oldLines)+len(newLines))
-	for _, line := range oldLines {
+	for _, line := range oldLines[:prefix] {
+		operations = append(operations, diffOperation{' ', line})
+	}
+	for _, line := range oldLines[prefix : len(oldLines)-suffix] {
 		operations = append(operations, diffOperation{'-', line})
 	}
-	for _, line := range newLines {
+	for _, line := range newLines[prefix : len(newLines)-suffix] {
 		operations = append(operations, diffOperation{'+', line})
+	}
+	for _, line := range oldLines[len(oldLines)-suffix:] {
+		operations = append(operations, diffOperation{' ', line})
 	}
 	return operations
 }

@@ -35,7 +35,12 @@ func writeWorkspaceFile(root, requested, content string) (string, string, string
 	if err != nil {
 		return "", "", "", false, err
 	}
-	tempFile, tempName, err := createWorkspaceTemp(parentFD, "file_write")
+	mode, err := workspaceFileMode(parentFD, name)
+	if err != nil {
+		pathErr := closeDescriptors(descriptors)
+		return "", "", "", false, combineWorkspaceErrors("file_write: inspecting existing file", err, nil, nil, pathErr)
+	}
+	tempFile, tempName, err := createWorkspaceTemp(parentFD, "file_write", mode)
 	if err != nil {
 		closeErr := closeDescriptors(descriptors)
 		if closeErr != nil {
@@ -82,10 +87,20 @@ func openWorkspaceParentForTarget(root, cleanPath, requested string, createParen
 	return parentFD, descriptors, components[len(components)-1], nil
 }
 
-func createWorkspaceTemp(parentFD int, toolName string) (*os.File, string, error) {
+func workspaceFileMode(parentFD int, name string) (uint32, error) {
+	var stat unix.Stat_t
+	if err := unix.Fstatat(parentFD, name, &stat, unix.AT_SYMLINK_NOFOLLOW); errors.Is(err, unix.ENOENT) {
+		return 0o644, nil
+	} else if err != nil {
+		return 0, err
+	}
+	return uint32(stat.Mode & 0o7777), nil
+}
+
+func createWorkspaceTemp(parentFD int, toolName string, mode uint32) (*os.File, string, error) {
 	for index := 0; index < 100; index++ {
 		name := fmt.Sprintf(".mortise-%d-%d", os.Getpid(), index)
-		fd, err := unix.Openat(parentFD, name, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0o644)
+		fd, err := unix.Openat(parentFD, name, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_CLOEXEC|unix.O_NOFOLLOW, mode)
 		if errors.Is(err, unix.EEXIST) {
 			continue
 		}
@@ -352,7 +367,7 @@ func openWorkspaceParent(root, cleanPath, requested string, options workspacePar
 	for index, component := range components[:len(components)-1] {
 		nextFD, openErr := openWorkspaceDirectory(parentFD, component)
 		if index+1 >= len(options.expected) && openErr == nil {
-			closeErr := closeDescriptors(descriptors)
+			closeErr := errors.Join(unix.Close(nextFD), closeDescriptors(descriptors))
 			if closeErr != nil {
 				return 0, nil, fmt.Errorf("%s: verifying %q: workspace path changed during resolution; closing: %w", options.toolName, requested, closeErr)
 			}
