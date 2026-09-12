@@ -1,4 +1,4 @@
-// Package tools stores the shared in-memory history used by file tools.
+// file_history.go — the shared in-memory history used by file tools.
 //
 // Responsibilities:
 //   - Share per-workspace previous file contents between file_write and file_diff
@@ -8,6 +8,7 @@
 // or persistent storage.
 //
 // See: docs/specs/01-core-agent-harness.md §3.3, ticket 08.
+
 package tools
 
 import (

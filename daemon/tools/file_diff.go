@@ -1,4 +1,4 @@
-// Package tools provides the workspace-scoped file_diff tool and diff engine.
+// file_diff.go — the workspace-scoped file_diff tool and diff engine.
 //
 // Responsibilities:
 //   - Read a workspace file through descriptor-anchored resolution
@@ -8,6 +8,7 @@
 // Is NOT responsible for writing files, approval policy, or persistent history.
 //
 // See: docs/specs/01-core-agent-harness.md §3.3, ticket 08.
+
 package tools
 
 import (

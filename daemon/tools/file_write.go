@@ -1,4 +1,4 @@
-// Package tools provides the workspace-scoped file_write tool.
+// file_write.go — the workspace-scoped file_write tool.
 //
 // Responsibilities:
 //   - Validate file_write parameters and execute workspace writes
@@ -9,6 +9,7 @@
 // and session layers.
 //
 // See: docs/specs/01-core-agent-harness.md §3.3, ticket 08.
+
 package tools
 
 import (

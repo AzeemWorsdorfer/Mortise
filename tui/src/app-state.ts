@@ -91,22 +91,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         textLines: [...state.textLines, action.text].slice(-50),
       };
     case 'tool_pending':
-      return {
-        ...state,
-        toolCalls: [
-          ...state.toolCalls,
-          {
-            callId: action.callId,
-            turnNumber: action.turnNumber,
-            toolName: action.toolName,
-            parametersJson: action.parametersJson,
-            diffPreview: action.diffPreview,
-            additions: action.additions,
-            deletions: action.deletions,
-            status: 'pending' as const,
-          },
-        ].slice(-20),
-      };
+      return recordToolPending(state, action);
     case 'tool_completed':
       return updateToolCompleted(state, action);
     case 'summary':
@@ -116,6 +101,30 @@ export function appReducer(state: AppState, action: AppAction): AppState {
     default:
       return state;
   }
+}
+
+// recordToolPending appends one pending tool call, keeping the trace
+// bounded to the latest 20 entries.
+function recordToolPending(
+  state: AppState,
+  action: Extract<AppAction, { type: 'tool_pending' }>,
+): AppState {
+  return {
+    ...state,
+    toolCalls: [
+      ...state.toolCalls,
+      {
+        callId: action.callId,
+        turnNumber: action.turnNumber,
+        toolName: action.toolName,
+        parametersJson: action.parametersJson,
+        diffPreview: action.diffPreview,
+        additions: action.additions,
+        deletions: action.deletions,
+        status: 'pending' as const,
+      },
+    ].slice(-20),
+  };
 }
 
 function updateToolCompleted(
