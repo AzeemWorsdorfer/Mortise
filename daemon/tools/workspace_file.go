@@ -30,11 +30,34 @@ type workspaceWriteTarget struct {
 	cleanPath   string
 }
 
-func writeWorkspaceFile(root, requested, content string) (string, string, string, bool, error) {
+func writeWorkspaceFile(root, requested, content string, history *FileHistory) (string, string, string, bool, error) {
 	workspace, err := openWorkspaceWriteTarget(root, requested)
 	if err != nil {
 		return "", "", "", false, err
 	}
+	lockPath := historyTargetPath(root, workspace.target)
+	var (
+		target      string
+		displayPath string
+		previous    string
+		existed     bool
+	)
+	err = history.withFileLock(lockPath, func() error {
+		var err error
+		target, displayPath, previous, existed, err = writeOpenedWorkspaceFile(workspace, content)
+		if err != nil {
+			return err
+		}
+		history.push(historyTargetPath(root, target), previous, existed)
+		return nil
+	})
+	if err != nil {
+		return "", "", "", false, err
+	}
+	return target, displayPath, previous, existed, nil
+}
+
+func writeOpenedWorkspaceFile(workspace workspaceWriteTarget, content string) (string, string, string, bool, error) {
 	previous, existed, err := readWorkspaceTarget(workspace.parentFD, workspace.name, workspace.target)
 	if err != nil {
 		pathErr := closeDescriptors(workspace.descriptors)

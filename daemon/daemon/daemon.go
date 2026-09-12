@@ -95,6 +95,9 @@ type Daemon struct {
 	// a real or test provider. A nil value uses the built-in mock provider.
 	AgentProvider agent.Provider
 
+	agentMu      sync.Mutex
+	agentRunning bool
+
 	// agentContext is the daemon-lifetime context used by the agent loop.
 	agentContext context.Context
 
@@ -284,7 +287,19 @@ func (d *Daemon) StartAgent(ctx context.Context, prompt string) {
 		d.Logger.Warn("StartAgent called but AgentLoop is nil")
 		return
 	}
+	d.agentMu.Lock()
+	if d.agentRunning {
+		d.agentMu.Unlock()
+		return
+	}
+	d.agentRunning = true
+	d.agentMu.Unlock()
 	go func() {
+		defer func() {
+			d.agentMu.Lock()
+			d.agentRunning = false
+			d.agentMu.Unlock()
+		}()
 		d.Logger.Info("agent loop started", "prompt", prompt)
 		if err := d.AgentLoop.Run(ctx, prompt); err != nil {
 			if !errors.Is(err, context.Canceled) {
