@@ -335,7 +335,8 @@ func TestAgentLoop_ToolResultsFedBackToProvider(t *testing.T) {
 	reg, _ := newTestRegistry(t)
 	recorder := &reqRecorder{inner: &stubProvider{
 		events: []ProviderEvent{
-			{Type: EventDone},
+			{Type: EventToolCall, ToolName: "file_read", ParametersJSON: `{"path":"package.json"}`},
+			{Type: EventDone, Usage: &UsageInfo{InputTokens: 10, OutputTokens: 5}},
 		},
 	}}
 	loop := NewAgentLoop(Options{Provider: recorder, Bus: spy, Tools: reg})
@@ -343,29 +344,20 @@ func TestAgentLoop_ToolResultsFedBackToProvider(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Execute one tool through the loop's real tool-call path.
-	done, err := loop.handleToolCall(ctx, 1, ProviderEvent{
-		Type:           EventToolCall,
-		ToolName:       "file_read",
-		ParametersJSON: `{"path":"package.json"}`,
-	})
-	if err != nil || done {
-		t.Fatalf("handleToolCall: done=%v err=%v", done, err)
-	}
-
-	// The next turn's request must carry the executed outcome.
-	if _, err := loop.sendTurn(ctx, 2, "continue"); err != nil {
-		t.Fatalf("sendTurn: %v", err)
+	// Run must start a second provider turn after executing the tool so
+	// the provider can observe the result.
+	if err := loop.Run(ctx, "continue after the tool"); err != nil {
+		t.Fatalf("Run: %v", err)
 	}
 
 	reqs := recorder.Requests()
-	if len(reqs) != 1 {
-		t.Fatalf("provider received %d requests, want 1", len(reqs))
+	if len(reqs) != 2 {
+		t.Fatalf("provider received %d requests, want first call plus observation turn", len(reqs))
 	}
-	if len(reqs[0].ToolResults) != 1 {
-		t.Fatalf("request carried %d tool results, want 1", len(reqs[0].ToolResults))
+	if len(reqs[1].ToolResults) != 1 {
+		t.Fatalf("observation request carried %d tool results, want 1", len(reqs[1].ToolResults))
 	}
-	res := reqs[0].ToolResults[0]
+	res := reqs[1].ToolResults[0]
 	if res.ToolName != "file_read" || !strings.Contains(res.Output, `"name":"mortise"`) {
 		t.Errorf("tool result = %+v, want file_read output with contents", res)
 	}

@@ -27,5 +27,11 @@ type ToolExecutor interface {
 	Execute(ctx context.Context, name string, params json.RawMessage) (*tools.ToolResult, error)
 }
 
+// toolDefinitionProvider is the optional capability used to advertise
+// registered tools without widening the execution seam used by test fakes.
+type toolDefinitionProvider interface {
+	ToolDefinitions() (string, error)
+}
+
 // Compile-time check that the production registry satisfies the seam.
 var _ ToolExecutor = (*tools.ToolRegistry)(nil)

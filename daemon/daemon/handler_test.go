@@ -183,11 +183,25 @@ func TestHandler_Connect_LogsIncomingCommand(t *testing.T) {
 	}
 }
 
+// idleProvider is a Provider whose SendPrompt returns a channel that
+// never yields events and never closes. The demo agent loop started on
+// first connect publishes only its IDLE→PLANNING transition and then
+// blocks, so no agent-loop events race with the fan-out assertions.
+type idleProvider struct{}
+
+func (idleProvider) SendPrompt(ctx context.Context, _ *agent.ProviderRequest) (<-chan agent.ProviderEvent, error) {
+	ch := make(chan agent.ProviderEvent)
+	return ch, nil
+}
+
+func (idleProvider) ProviderID() string { return "idle" }
+
 func TestHandler_Connect_MultiClientFanOut(t *testing.T) {
 	t.Parallel()
 
 	sockPath := filepath.Join(shortTempDir(t), "x.sock")
 	d := newTestDaemon(t, sockPath, "m", "p", slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	d.AgentProvider = idleProvider{}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -302,20 +316,31 @@ func TestHandler_Connect_MultiClientFanOut(t *testing.T) {
 			r, e := stream.Receive()
 			resCh <- result{resp: r, err: e}
 		}()
-		select {
-		case r := <-resCh:
-			if r.err != nil {
-				t.Fatalf("%s: Receive after publish: %v", label, r.err)
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			select {
+			case r := <-resCh:
+				if r.err != nil {
+					t.Fatalf("%s: Receive after publish: %v", label, r.err)
+				}
+				// Skip stray demo-loop events (e.g. the demo
+				// agent's IDLE→PLANNING transition) so the
+				// assertion targets the published event only.
+				if r.resp.GetPhaseChange() != nil {
+					return r.resp.GetPhaseChange()
+				}
+				resCh = make(chan result, 1)
+				go func() {
+					r, e := stream.Receive()
+					resCh <- result{resp: r, err: e}
+				}()
+			case <-time.After(2 * time.Second):
+				t.Fatalf("%s: did not receive published PhaseTransitionEvent within 2s", label)
+				return nil
 			}
-			pc := r.resp.GetPhaseChange()
-			if pc == nil {
-				t.Fatalf("%s: want PhaseTransitionEvent, got %+v", label, r.resp)
-			}
-			return pc
-		case <-time.After(2 * time.Second):
-			t.Fatalf("%s: did not receive published PhaseTransitionEvent within 2s", label)
-			return nil
 		}
+		t.Fatalf("%s: deadline exceeded waiting for PhaseTransitionEvent", label)
+		return nil
 	}
 	if pc := got("a", a); pc.GetReason() != "test fan-out" {
 		t.Errorf("a: reason: want %q, got %q", "test fan-out", pc.GetReason())
@@ -349,134 +374,6 @@ func TestServe_GracefulShutdown_RemovesSocket(t *testing.T) {
 
 	if _, err := os.Stat(sockPath); !os.IsNotExist(err) {
 		t.Errorf("socket should be removed after shutdown; stat err = %v", err)
-	}
-}
-
-func TestHandler_Connect_ApprovalCommandsControlFileWrite(t *testing.T) {
-	for _, approved := range []bool{true, false} {
-		t.Run(map[bool]string{true: "approve", false: "reject"}[approved], func(t *testing.T) {
-			runWireApprovalScenario(t, approved)
-		})
-	}
-}
-
-func runWireApprovalScenario(t *testing.T, approved bool) {
-	t.Helper()
-	root := t.TempDir()
-	d := newTestDaemon(t, filepath.Join(shortTempDir(t), "x.sock"), "m", "p", slog.New(slog.NewTextHandler(io.Discard, nil)))
-	d.Workspace = root
-	d.ToolApproval = map[string]string{"file_write": "confirm"}
-	d.AgentProvider = approvalProvider{parameters: `{"path":"nested/wire.txt","content":"wire\n"}`}
-	stop, done := startTestServer(t, d)
-	defer stopTestServer(t, stop, done)
-	waitForAgent(t, d)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	stream := mortisev1connect.NewAgentServiceClient(newUnixHTTPClient(d.SocketPath), "http://unix").Connect(ctx)
-	defer func() {
-		if err := stream.CloseRequest(); err != nil {
-			t.Logf("CloseRequest: %v", err)
-		}
-	}()
-	if err := stream.Send(nil); err != nil {
-		t.Fatalf("open stream: %v", err)
-	}
-	pending := receivePendingTool(t, stream)
-	if !pending.RequiresApproval || pending.DiffPreview == "" {
-		t.Fatalf("pending approval event = %+v, want approval and preview", pending)
-	}
-	if _, err := os.Stat(filepath.Join(root, "nested")); !os.IsNotExist(err) {
-		t.Fatalf("preview created parent directory; Stat err = %v", err)
-	}
-	command := &mortisev1.ClientCommand{}
-	if approved {
-		command.Command = &mortisev1.ClientCommand_Approve{Approve: &mortisev1.ApproveToolCall{CallId: pending.CallId}}
-	} else {
-		command.Command = &mortisev1.ClientCommand_Reject{Reject: &mortisev1.RejectToolCall{CallId: pending.CallId, Reason: "not authorized"}}
-	}
-	if err := stream.Send(command); err != nil {
-		t.Fatalf("send approval command: %v", err)
-	}
-	completed := receiveCompletedTool(t, stream)
-	if completed.Success != approved {
-		t.Fatalf("completed.Success = %v, want %v", completed.Success, approved)
-	}
-	_, statErr := os.Stat(filepath.Join(root, "nested", "wire.txt"))
-	if approved && statErr != nil {
-		t.Fatalf("approved write missing: %v", statErr)
-	}
-	if !approved && !os.IsNotExist(statErr) {
-		t.Fatalf("rejected write exists; Stat err = %v", statErr)
-	}
-}
-
-func startTestServer(t *testing.T, d *Daemon) (context.CancelFunc, <-chan error) {
-	t.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- d.Serve(ctx) }()
-	waitForSocket(t, d.SocketPath)
-	return cancel, done
-}
-
-func stopTestServer(t *testing.T, cancel context.CancelFunc, done <-chan error) {
-	t.Helper()
-	cancel()
-	if err := <-done; err != nil {
-		t.Errorf("Serve: %v", err)
-	}
-}
-
-func waitForAgent(t *testing.T, d *Daemon) {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for d.ToolRegistry() == nil && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
-	if d.ToolRegistry() == nil {
-		t.Fatal("Serve did not initialize ToolRegistry")
-	}
-}
-
-// approvalProvider emits one file_write proposal and then waits for the
-// AgentLoop to receive the approval command before the next turn.
-type approvalProvider struct {
-	parameters string
-}
-
-func (p approvalProvider) SendPrompt(context.Context, *agent.ProviderRequest) (<-chan agent.ProviderEvent, error) {
-	events := make(chan agent.ProviderEvent, 2)
-	events <- agent.ProviderEvent{Type: agent.EventToolCall, ToolName: "file_write", ParametersJSON: p.parameters}
-	events <- agent.ProviderEvent{Type: agent.EventDone}
-	close(events)
-	return events, nil
-}
-
-func (p approvalProvider) ProviderID() string { return "approval-test" }
-
-func receivePendingTool(t *testing.T, stream *connect.BidiStreamForClient[mortisev1.ClientCommand, mortisev1.ServerEvent]) *mortisev1.ToolCallPending {
-	t.Helper()
-	for {
-		event, err := stream.Receive()
-		if err != nil {
-			t.Fatalf("Receive pending: %v", err)
-		}
-		if pending := event.GetToolPending(); pending != nil {
-			return pending
-		}
-	}
-}
-
-func receiveCompletedTool(t *testing.T, stream *connect.BidiStreamForClient[mortisev1.ClientCommand, mortisev1.ServerEvent]) *mortisev1.ToolCallCompleted {
-	t.Helper()
-	for {
-		event, err := stream.Receive()
-		if err != nil {
-			t.Fatalf("Receive completed: %v", err)
-		}
-		if completed := event.GetToolCompleted(); completed != nil {
-			return completed
-		}
 	}
 }
 

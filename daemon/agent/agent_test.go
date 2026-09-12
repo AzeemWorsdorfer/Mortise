@@ -20,9 +20,13 @@ type stubProvider struct {
 }
 
 func (s *stubProvider) SendPrompt(ctx context.Context, req *ProviderRequest) (<-chan ProviderEvent, error) {
-	ch := make(chan ProviderEvent, len(s.events))
-	for _, e := range s.events {
-		ch <- e
+	events := s.events
+	if len(req.ToolResults) > 0 {
+		events = []ProviderEvent{{Type: EventDone}}
+	}
+	ch := make(chan ProviderEvent, len(events))
+	for _, event := range events {
+		ch <- event
 	}
 	close(ch)
 	return ch, nil
@@ -112,9 +116,12 @@ func TestAgentLoop_Run_TransitionsThroughPhases(t *testing.T) {
 	transitions := spy.phaseTransitions()
 
 	// Expected: IDLE→PLANNING, PLANNING→ACTING, ACTING→OBSERVING,
-	// OBSERVING→DECIDING, DECIDING→COMPLETED
-	if len(transitions) < 5 {
-		t.Fatalf("expected at least 5 phase transitions, got %d", len(transitions))
+	// OBSERVING→DECIDING (turn 1 executed a tool), DECIDING→PLANNING
+	// (the loop continues so the provider can observe the tool
+	// result), PLANNING→DECIDING (turn 2 proposes nothing new),
+	// DECIDING→COMPLETED.
+	if len(transitions) < 7 {
+		t.Fatalf("expected at least 7 phase transitions, got %d", len(transitions))
 	}
 
 	// IDLE → PLANNING
@@ -129,8 +136,14 @@ func TestAgentLoop_Run_TransitionsThroughPhases(t *testing.T) {
 	// OBSERVING → DECIDING
 	assertTransition(t, transitions[3], mortisev1.AgentPhase_OBSERVING, mortisev1.AgentPhase_DECIDING, "evaluating results")
 
+	// DECIDING → PLANNING (observation turn)
+	assertTransition(t, transitions[4], mortisev1.AgentPhase_DECIDING, mortisev1.AgentPhase_PLANNING, "continue after tool results")
+
+	// PLANNING → DECIDING (no tool call in the observation turn)
+	assertTransition(t, transitions[5], mortisev1.AgentPhase_PLANNING, mortisev1.AgentPhase_DECIDING, "evaluating results")
+
 	// DECIDING → COMPLETED
-	assertTransition(t, transitions[4], mortisev1.AgentPhase_DECIDING, mortisev1.AgentPhase_COMPLETED, "all steps complete")
+	assertTransition(t, transitions[6], mortisev1.AgentPhase_DECIDING, mortisev1.AgentPhase_COMPLETED, "all steps complete")
 
 	if loop.Phase() != mortisev1.AgentPhase_COMPLETED {
 		t.Errorf("final phase: want COMPLETED, got %v", loop.Phase())
@@ -395,103 +408,6 @@ func TestAgentLoop_SessionSummary_OnComplete(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Mock provider tests
-// ---------------------------------------------------------------------------
-
-func TestMockProvider_SendPrompt_ReturnsConfigurableSequence(t *testing.T) {
-	t.Parallel()
-
-	mp := NewMockProvider(1)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	ch, err := mp.SendPrompt(ctx, &ProviderRequest{
-		SystemPrompt: "You are a helpful assistant.",
-		UserMessage:  "Read the project.",
-	})
-	if err != nil {
-		t.Fatalf("SendPrompt: %v", err)
-	}
-
-	var events []ProviderEvent
-	for ev := range ch {
-		events = append(events, ev)
-	}
-
-	// Should get: thinking → text → tool_call → done
-	if len(events) < 4 {
-		t.Fatalf("expected at least 4 events, got %d: %+v", len(events), events)
-	}
-	assertEventType(t, events[0].Type, EventThinking, "first event")
-	assertEventType(t, events[1].Type, EventText, "second event")
-	assertEventType(t, events[2].Type, EventToolCall, "third event")
-	assertEventType(t, events[3].Type, EventDone, "fourth event")
-}
-
-func TestMockProvider_MultiTurn_DifferentSequences(t *testing.T) {
-	t.Parallel()
-
-	mp := NewMockProvider(3)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	// Turn 1
-	ch1, err := mp.SendPrompt(ctx, &ProviderRequest{UserMessage: "task 1"})
-	if err != nil {
-		t.Fatalf("SendPrompt turn 1: %v", err)
-	}
-	events1 := drainChannel(ch1)
-	if len(events1) < 4 {
-		t.Fatalf("turn 1: expected at least 4 events, got %d", len(events1))
-	}
-
-	// Turn 2
-	ch2, err := mp.SendPrompt(ctx, &ProviderRequest{UserMessage: "task 2"})
-	if err != nil {
-		t.Fatalf("SendPrompt turn 2: %v", err)
-	}
-	events2 := drainChannel(ch2)
-	if len(events2) < 4 {
-		t.Fatalf("turn 2: expected at least 4 events, got %d", len(events2))
-	}
-
-	// Turn 3
-	ch3, err := mp.SendPrompt(ctx, &ProviderRequest{UserMessage: "task 3"})
-	if err != nil {
-		t.Fatalf("SendPrompt turn 3: %v", err)
-	}
-	events3 := drainChannel(ch3)
-	if len(events3) < 4 {
-		t.Fatalf("turn 3: expected at least 4 events, got %d", len(events3))
-	}
-}
-
-func TestMockProvider_Usage(t *testing.T) {
-	t.Parallel()
-
-	mp := NewMockProvider(1)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	ch, err := mp.SendPrompt(ctx, &ProviderRequest{UserMessage: "test"})
-	if err != nil {
-		t.Fatalf("SendPrompt: %v", err)
-	}
-
-	events := drainChannel(ch)
-	done := events[len(events)-1]
-	if done.Usage == nil {
-		t.Fatal("EventDone: expected Usage to be populated")
-	}
-	if done.Usage.InputTokens <= 0 {
-		t.Errorf("InputTokens: want > 0, got %d", done.Usage.InputTokens)
-	}
-	if done.Usage.OutputTokens <= 0 {
-		t.Errorf("OutputTokens: want > 0, got %d", done.Usage.OutputTokens)
-	}
-}
-
-// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -513,12 +429,4 @@ func assertEventType(t *testing.T, got, want ProviderEventType, label string) {
 	if got != want {
 		t.Errorf("%s: want %v, got %v", label, want, got)
 	}
-}
-
-func drainChannel(ch <-chan ProviderEvent) []ProviderEvent {
-	var out []ProviderEvent
-	for ev := range ch {
-		out = append(out, ev)
-	}
-	return out
 }

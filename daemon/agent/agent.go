@@ -183,6 +183,10 @@ func (l *AgentLoop) Run(ctx context.Context, userPrompt string) error {
 		if turnDone {
 			break
 		}
+		// The turn executed a tool, so the provider must observe the
+		// outcome before the run can end. Re-enter the cycle through
+		// the state machine's DECIDING → PLANNING edge.
+		l.transitionWithReport(mortisev1.AgentPhase_PLANNING, "continue after tool results")
 	}
 
 	l.complete()
@@ -221,6 +225,13 @@ func (l *AgentLoop) sendTurn(ctx context.Context, turn int32, userPrompt string)
 		req.ToolResults = append([]ToolOutcome{}, l.toolOutcomes...)
 	}
 	l.mu.Unlock()
+	if provider, ok := l.tools.(toolDefinitionProvider); ok {
+		definitions, err := provider.ToolDefinitions()
+		if err != nil {
+			return nil, fmt.Errorf("agent: tool definitions: %w", err)
+		}
+		req.ToolDefinitions = definitions
+	}
 
 	eventCh, err := l.provider.SendPrompt(ctx, req)
 	if err != nil {
@@ -269,8 +280,10 @@ func (l *AgentLoop) emitSummary() {
 // processTurn reads the provider's event channel for one turn,
 // translating each ProviderEvent into ServerEvents and publishing
 // them through the bus. It returns (done, error) — done is true
-// when the model signals completion.
+// when the turn ended without executing a tool, so the provider has
+// nothing new to observe and the run may complete.
 func (l *AgentLoop) processTurn(ctx context.Context, eventCh <-chan ProviderEvent, turn int32) (bool, error) {
+	toolExecuted := false
 	for {
 		select {
 		case <-ctx.Done():
@@ -278,15 +291,21 @@ func (l *AgentLoop) processTurn(ctx context.Context, eventCh <-chan ProviderEven
 		case ev, ok := <-eventCh:
 			if !ok {
 				// Channel closed without EventDone — the provider
-				// is done but didn't signal explicitly. Treat as
-				// completion.
-				l.transitionWithReport(mortisev1.AgentPhase_OBSERVING, "evaluating results")
-				l.transitionWithReport(mortisev1.AgentPhase_DECIDING, "evaluating results")
-				return true, nil
+				// finished its stream without an explicit end
+				// marker. A tool call still requires a follow-up
+				// provider turn to observe its result.
+				l.advanceAfterDone()
+				return !toolExecuted, nil
+			}
+			if ev.Type == EventToolCall {
+				toolExecuted = true
 			}
 			done, err := l.handleProviderEvent(ctx, ev, turn)
-			if err != nil || done {
-				return done, err
+			if err != nil {
+				return false, err
+			}
+			if done {
+				return !toolExecuted, nil
 			}
 		}
 	}
