@@ -173,9 +173,9 @@ func (b *EventBus) Publish(event *mortisev1.ServerEvent) {
 	}
 }
 
-// PublishApproval delivers an approval event directly to subscribers and
+// PublishImmediate delivers an event directly to current subscribers and
 // reports whether at least one subscriber received it.
-func (b *EventBus) PublishApproval(event *mortisev1.ServerEvent) bool {
+func (b *EventBus) PublishImmediate(event *mortisev1.ServerEvent) bool {
 	if event == nil {
 		return false
 	}
@@ -197,6 +197,12 @@ func (b *EventBus) PublishApproval(event *mortisev1.ServerEvent) bool {
 		}
 	}
 	return delivered
+}
+
+// PublishApproval delivers an approval event directly to subscribers and
+// reports whether at least one subscriber received it.
+func (b *EventBus) PublishApproval(event *mortisev1.ServerEvent) bool {
+	return b.PublishImmediate(event)
 }
 
 // Run is the fan-out loop. It reads events from publishCh,

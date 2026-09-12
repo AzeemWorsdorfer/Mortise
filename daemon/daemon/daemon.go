@@ -137,14 +137,16 @@ func (d *Daemon) Serve(ctx context.Context) error {
 		return errors.New("daemon: Logger is required")
 	}
 	d.uptimeOnce.Do(func() { d.startedAt = time.Now() })
-	d.agentContext = ctx
+	agentContext, cancelAgent := context.WithCancel(ctx)
+	defer cancelAgent()
+	d.agentContext = agentContext
 
 	// Spin up the EventBus and its fan-out goroutine. The bus is
 	// owned by the daemon and lives for the duration of Serve;
 	// shutdown() calls Close on it to release subscriber channels.
 	d.EventBus = NewEventBus()
 	d.EventBus.SetLogger(d.Logger.With("component", "eventbus"))
-	go d.EventBus.Run(ctx)
+	go d.EventBus.Run(agentContext)
 
 	// Wire up the AgentLoop with the EventBus as its publisher.
 	// The mock provider is used for demo purposes; real providers
@@ -204,8 +206,15 @@ func (d *Daemon) Serve(ctx context.Context) error {
 	case <-ctx.Done():
 		return d.shutdown(ctx, httpServer, errCh)
 	case err := <-errCh:
+		cancelAgent()
+		if d.EventBus != nil {
+			d.EventBus.Close()
+		}
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
+		}
+		if closeErr := d.Listener.Close(); closeErr != nil {
+			d.Logger.Warn("listener close after serve error", "err", closeErr)
 		}
 		if rmErr := os.Remove(d.SocketPath); rmErr != nil {
 			d.Logger.Warn("socket remove on serve error", "err", rmErr)
