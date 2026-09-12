@@ -118,8 +118,11 @@ func (l *AgentLoop) resolveApproval(callID string, decision approvalDecision) bo
 	l.approvalMu.Lock()
 	channel, ok := l.pendingApprovals[callID]
 	if ok {
-		delete(l.pendingApprovals, callID)
-		channel <- decision
+		select {
+		case channel <- decision:
+		default:
+			ok = false
+		}
 	}
 	l.approvalMu.Unlock()
 	return ok

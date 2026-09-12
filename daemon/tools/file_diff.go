@@ -71,17 +71,31 @@ func (f *FileDiff) Execute(ctx context.Context, params json.RawMessage) (*ToolRe
 	if err := ctx.Err(); err != nil {
 		return failedResult(err)
 	}
-	current, target, displayPath, _, err := readWorkspaceFile(f.workspaceRoot, p.Path, "file_diff", false)
+	var result *ToolResult
+	lockPath := historyLockPath(f.workspaceRoot, p.Path)
+	err := f.history.withFileLock(lockPath, func() error {
+		current, target, displayPath, _, err := readWorkspaceFile(f.workspaceRoot, p.Path, "file_diff", false)
+		if err != nil {
+			return err
+		}
+		previous, previousExists, found := f.history.last(historyTargetPath(f.workspaceRoot, target))
+		if !found {
+			previous = ""
+			previousExists = false
+		}
+		additions, deletions := diffStats(previous, current)
+		result = &ToolResult{
+			Success:   true,
+			Output:    unifiedDiff(displayPath, previous, current, previousExists),
+			Additions: additions,
+			Deletions: deletions,
+		}
+		return nil
+	})
 	if err != nil {
 		return failedResult(err)
 	}
-	previous, previousExists, found := f.history.last(historyTargetPath(f.workspaceRoot, target))
-	if !found {
-		previous = ""
-		previousExists = false
-	}
-	additions, deletions := diffStats(previous, current)
-	return &ToolResult{Success: true, Output: unifiedDiff(displayPath, previous, current, previousExists), Additions: additions, Deletions: deletions}, nil
+	return result, nil
 }
 
 func unifiedDiff(path, oldContent, newContent string, oldExists bool) string {

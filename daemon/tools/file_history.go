@@ -80,9 +80,16 @@ func historyTargetPath(_ string, target string) string {
 }
 
 func historyLockPath(root, requested string) string {
+	absoluteRoot, err := filepath.Abs(root)
+	if err != nil {
+		absoluteRoot = root
+	}
 	target := requested
 	if !filepath.IsAbs(target) {
-		target = filepath.Join(root, target)
+		target = filepath.Join(absoluteRoot, target)
+	}
+	if resolved, resolveErr := resolveExistingPrefix(target, true); resolveErr == nil {
+		target = resolved
 	}
 	return historyTargetPath(root, target)
 }

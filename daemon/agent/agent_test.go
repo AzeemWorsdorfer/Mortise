@@ -52,6 +52,11 @@ func (s *eventSpy) Publish(ev *mortisev1.ServerEvent) {
 	s.events = append(s.events, ev)
 }
 
+func (s *eventSpy) PublishApproval(ev *mortisev1.ServerEvent) bool {
+	s.Publish(ev)
+	return true
+}
+
 func (s *eventSpy) Events() []*mortisev1.ServerEvent {
 	s.mu.Lock()
 	defer s.mu.Unlock()

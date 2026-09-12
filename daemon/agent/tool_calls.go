@@ -125,11 +125,13 @@ func (l *AgentLoop) publishApproval(event *mortisev1.ServerEvent) bool {
 	})
 	if !ok {
 		l.publish(event)
-		return l.bus != nil
+		return false
 	}
 	event.TimestampMs = uint64(time.Now().UnixMilli())
 	return publisher.PublishApproval(event)
 }
+
+const approvalTimeout = 30 * time.Second
 
 func (l *AgentLoop) awaitApproval(ctx context.Context, callID string) *tools.ToolResult {
 	l.approvalMu.Lock()
@@ -138,11 +140,15 @@ func (l *AgentLoop) awaitApproval(ctx context.Context, callID string) *tools.Too
 	if !pending {
 		return nil
 	}
+	approvalTimer := time.NewTimer(approvalTimeout)
+	defer approvalTimer.Stop()
 	var decision approvalDecision
 	select {
 	case decision = <-channel:
 	case <-ctx.Done():
 		decision = approvalDecision{reason: ctx.Err().Error()}
+	case <-approvalTimer.C:
+		decision = approvalDecision{reason: "approval request timed out"}
 	}
 	l.approvalMu.Lock()
 	delete(l.pendingApprovals, callID)
