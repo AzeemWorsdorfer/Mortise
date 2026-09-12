@@ -105,16 +105,16 @@ func openWorkspaceWriteTarget(root, requested string) (workspaceWriteTarget, err
 	}
 	resolvedRoot, err := resolvedWorkspaceRoot(root, "file_write")
 	if err != nil {
-		unix.Close(rootFD)
+		_ = unix.Close(rootFD) //nolint:errcheck // caller already has a failure reason
 		return workspaceWriteTarget{}, err
 	}
 	if err := verifyWorkspacePathIdentity(resolvedRoot, rootIdentity); err != nil {
-		unix.Close(rootFD)
+		_ = unix.Close(rootFD) //nolint:errcheck // caller already has a failure reason
 		return workspaceWriteTarget{}, err
 	}
 	cleanPath, err := cleanWorkspacePath(resolvedRoot, requested, "file_write")
 	if err != nil {
-		unix.Close(rootFD)
+		_ = unix.Close(rootFD) //nolint:errcheck // caller already has a failure reason
 		return workspaceWriteTarget{}, err
 	}
 	cleanPath, target, err := resolveWorkspaceTarget(resolvedRoot, cleanPath, requested, workspaceOpenOptions{
@@ -123,12 +123,12 @@ func openWorkspaceWriteTarget(root, requested string) (workspaceWriteTarget, err
 		toolName:      "file_write",
 	})
 	if err != nil {
-		unix.Close(rootFD)
+		_ = unix.Close(rootFD) //nolint:errcheck // caller already has a failure reason
 		return workspaceWriteTarget{}, err
 	}
 	expected, err := workspaceAncestorIdentities(resolvedRoot, cleanPath)
 	if err != nil {
-		unix.Close(rootFD)
+		_ = unix.Close(rootFD) //nolint:errcheck // caller already has a failure reason
 		return workspaceWriteTarget{}, boundaryPathError("file_write", requested, err)
 	}
 	expected[0] = rootIdentity
@@ -278,27 +278,27 @@ func openWorkspaceFile(root, requested string, options workspaceOpenOptions) (*o
 	}
 	resolvedRoot, err := resolvedWorkspaceRoot(root, options.toolName)
 	if err != nil {
-		unix.Close(rootFD)
+		_ = unix.Close(rootFD) //nolint:errcheck // caller already has a failure reason
 		return nil, "", "", false, err
 	}
 	if err := verifyWorkspacePathIdentity(resolvedRoot, rootIdentity); err != nil {
-		unix.Close(rootFD)
+		_ = unix.Close(rootFD) //nolint:errcheck // caller already has a failure reason
 		return nil, "", "", false, err
 	}
 	cleanPath, err := cleanWorkspacePath(resolvedRoot, requested, options.toolName)
 	if err != nil {
-		unix.Close(rootFD)
+		_ = unix.Close(rootFD) //nolint:errcheck // caller already has a failure reason
 		return nil, "", "", false, err
 	}
 	cleanPath, target, err := resolveWorkspaceTarget(resolvedRoot, cleanPath, requested, options)
 	if err != nil {
-		unix.Close(rootFD)
+		_ = unix.Close(rootFD) //nolint:errcheck // caller already has a failure reason
 		return nil, "", "", false, err
 	}
 	components := strings.Split(cleanPath, string(filepath.Separator))
 	expected, err := workspaceAncestorIdentities(resolvedRoot, cleanPath)
 	if err != nil {
-		unix.Close(rootFD)
+		_ = unix.Close(rootFD) //nolint:errcheck // caller already has a failure reason
 		return nil, "", "", false, boundaryPathError(options.toolName, requested, err)
 	}
 	expected[0] = rootIdentity

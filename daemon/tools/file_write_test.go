@@ -27,7 +27,7 @@ func TestFileHistoryNormalizesRelativeWorkspaceRoots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.RemoveAll(root) })
+	t.Cleanup(func() { _ = os.RemoveAll(root) }) //nolint:errcheck // test cleanup
 	relativeRoot := root
 	writer := NewFileWrite(relativeRoot)
 	if _, err := writer.Execute(context.Background(), mustJSONWrite("file.txt", "written\n")); err != nil {
