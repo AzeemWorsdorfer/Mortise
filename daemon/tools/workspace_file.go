@@ -496,13 +496,7 @@ func openWorkspaceParent(root, cleanPath, requested string, options workspacePar
 	components := strings.Split(cleanPath, string(filepath.Separator))
 	for index, component := range components[:len(components)-1] {
 		nextFD, openErr := openWorkspaceDirectory(parentFD, component)
-		if index+1 >= len(options.expected) && openErr == nil {
-			closeErr := errors.Join(unix.Close(nextFD), closeDescriptors(descriptors))
-			if closeErr != nil {
-				return 0, nil, fmt.Errorf("%s: verifying %q: workspace path changed during resolution; closing: %w", options.toolName, requested, closeErr)
-			}
-			return 0, nil, fmt.Errorf("%s: verifying %q: workspace path changed during resolution", options.toolName, requested)
-		}
+		created := false
 		if errors.Is(openErr, unix.ENOENT) && options.allowMissing && !options.createParents {
 			if closeErr := closeDescriptors(descriptors); closeErr != nil {
 				return 0, nil, fmt.Errorf("%s: resolving %q: %v; closing workspace path: %w", options.toolName, requested, openErr, closeErr)
@@ -522,6 +516,14 @@ func openWorkspaceParent(root, cleanPath, requested string, options workspacePar
 				return 0, nil, fmt.Errorf("%s: creating parent directories for %q: %w", options.toolName, requested, mkdirErr)
 			}
 			nextFD, openErr = openWorkspaceDirectory(parentFD, component)
+			created = true
+		}
+		if index+1 >= len(options.expected) && openErr == nil && !created {
+			closeErr := errors.Join(unix.Close(nextFD), closeDescriptors(descriptors))
+			if closeErr != nil {
+				return 0, nil, fmt.Errorf("%s: verifying %q: workspace path changed during resolution; closing: %w", options.toolName, requested, closeErr)
+			}
+			return 0, nil, fmt.Errorf("%s: verifying %q: workspace path changed during resolution", options.toolName, requested)
 		}
 		if openErr != nil {
 			closeErr := closeDescriptors(descriptors)
