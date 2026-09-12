@@ -54,8 +54,6 @@ func (h *ConnectHandler) Connect(
 
 	clientID := uuid.NewString()
 	subCh := bus.Subscribe(clientID)
-	defer bus.Unsubscribe(clientID)
-
 	// Start the drain goroutine BEFORE publishing the
 	// SystemStatus so the event is guaranteed to land on the
 	// stream. The 64-deep subscription buffer provides a safety
@@ -65,13 +63,16 @@ func (h *ConnectHandler) Connect(
 		defer close(drainDone)
 		for ev := range subCh {
 			if err := stream.Send(ev); err != nil {
-				// Best-effort: the stream is broken, the
-				// receive loop below will see EOF on its
-				// next Receive and exit, taking the defer
-				// unsubscribe with it.
+				// Best-effort: the stream is broken, and the
+				// receive loop below will exit when its context
+				// is canceled.
 				return
 			}
 		}
+	}()
+	defer func() {
+		bus.Unsubscribe(clientID)
+		<-drainDone
 	}()
 
 	sessionID := h.sessionIDForLog()
@@ -108,12 +109,6 @@ func (h *ConnectHandler) Connect(
 		h.dispatchCommand(msg, sessionID)
 	}
 
-	// Trigger Unsubscribe via the defer; wait for the drain
-	// goroutine to exit so it cannot race with the unsubscribe
-	// on the bus's subscriber map. The drain goroutine will
-	// exit naturally when Unsubscribe closes subCh, but waiting
-	// here gives us a deterministic teardown for tests.
-	<-drainDone
 	return nil
 }
 

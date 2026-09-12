@@ -27,7 +27,7 @@ import type { ConnectionState } from './transport.js';
 import type { AppState } from './components/status-panel.js';
 
 export type AppAction =
-  | { type: 'status'; status: SystemStatus }
+  | { type: 'status'; status: SystemStatus; phase?: AgentPhase }
   | { type: 'phase_change'; event: PhaseTransitionEvent; phase: AgentPhase }
   | { type: 'thinking'; text: string }
   | { type: 'text'; text: string }
@@ -69,7 +69,11 @@ export const INITIAL_STATE: AppState = {
 export function appReducer(state: AppState, action: AppAction): AppState {
   switch (action.type) {
     case 'status':
-      return { ...state, status: action.status };
+      return {
+        ...state,
+        status: action.status,
+        phase: action.phase ?? state.phase,
+      };
     case 'phase_change':
       return {
         ...state,
@@ -154,7 +158,11 @@ function phaseFromEvent(ev: ServerEvent): AgentPhase {
 export function dispatchServerEvent(ev: ServerEvent, dispatch: (action: AppAction) => void): void {
   switch (ev.payload.case) {
     case 'status': {
-      dispatch({ type: 'status', status: ev.payload.value as SystemStatus });
+      dispatch({
+        type: 'status',
+        status: ev.payload.value as SystemStatus,
+        phase: phaseFromEvent(ev),
+      });
       break;
     }
     case 'phaseChange': {
