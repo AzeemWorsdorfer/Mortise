@@ -326,8 +326,8 @@ func TestHandler_Connect_MultiClientFanOut(t *testing.T) {
 				// Skip stray demo-loop events (e.g. the demo
 				// agent's IDLE→PLANNING transition) so the
 				// assertion targets the published event only.
-				if r.resp.GetPhaseChange() != nil {
-					return r.resp.GetPhaseChange()
+				if pc := r.resp.GetPhaseChange(); pc != nil && pc.GetReason() == "test fan-out" {
+					return pc
 				}
 				resCh = make(chan result, 1)
 				go func() {

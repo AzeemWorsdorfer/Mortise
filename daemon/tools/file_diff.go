@@ -71,7 +71,7 @@ func (f *FileDiff) Execute(ctx context.Context, params json.RawMessage) (*ToolRe
 	if err := ctx.Err(); err != nil {
 		return failedResult(err)
 	}
-	current, target, displayPath, err := readWorkspaceFile(f.workspaceRoot, p.Path, false)
+	current, target, displayPath, err := readWorkspaceFile(f.workspaceRoot, p.Path, "file_diff", false)
 	if err != nil {
 		return failedResult(err)
 	}

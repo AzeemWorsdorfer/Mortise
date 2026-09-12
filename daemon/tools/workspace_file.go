@@ -55,11 +55,14 @@ func writeWorkspaceFile(root, requested, content string) (string, string, string
 	return target, cleanPath, string(previous), nil
 }
 
-func readWorkspaceFile(root, requested string, allowMissing bool) (string, string, string, error) {
+// readWorkspaceFile opens and reads a workspace file for tools that
+// need current contents. The toolName labels any error the tool
+// reports so a file_write preview is not mislabeled as file_diff.
+func readWorkspaceFile(root, requested, toolName string, allowMissing bool) (string, string, string, error) {
 	file, target, cleanPath, err := openWorkspaceFile(root, requested, workspaceOpenOptions{
 		allowMissing: allowMissing,
 		flags:        unix.O_RDONLY | unix.O_CLOEXEC | unix.O_NOFOLLOW,
-		toolName:     "file_diff",
+		toolName:     toolName,
 	})
 	if err != nil {
 		return "", "", "", err
@@ -71,12 +74,12 @@ func readWorkspaceFile(root, requested string, allowMissing bool) (string, strin
 	closeErr := file.Close()
 	if readErr != nil {
 		if closeErr != nil {
-			return "", "", "", fmt.Errorf("file_diff: reading %q: %v; closing: %w", requested, readErr, closeErr)
+			return "", "", "", fmt.Errorf("%s: reading %q: %v; closing: %w", toolName, requested, readErr, closeErr)
 		}
-		return "", "", "", fmt.Errorf("file_diff: reading %q: %w", requested, readErr)
+		return "", "", "", fmt.Errorf("%s: reading %q: %w", toolName, requested, readErr)
 	}
 	if closeErr != nil {
-		return "", "", "", fmt.Errorf("file_diff: closing %q: %w", requested, closeErr)
+		return "", "", "", fmt.Errorf("%s: closing %q: %w", toolName, requested, closeErr)
 	}
 	return string(content), target, cleanPath, nil
 }

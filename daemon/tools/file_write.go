@@ -46,7 +46,7 @@ func (f *FileWrite) Preview(ctx context.Context, params json.RawMessage) (*ToolR
 	if err := ctx.Err(); err != nil {
 		return failedResult(err)
 	}
-	current, _, displayPath, err := readWorkspaceFile(f.workspaceRoot, p.Path, true)
+	current, _, displayPath, err := readWorkspaceFile(f.workspaceRoot, p.Path, "file_write", true)
 	if err != nil {
 		return failedResult(err)
 	}
