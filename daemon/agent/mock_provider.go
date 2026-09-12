@@ -71,9 +71,9 @@ func (m *MockProvider) SendPrompt(ctx context.Context, req *ProviderRequest) (<-
 			filePath = "package.json"
 		case 2:
 			thinking = "Looking at the dependencies..."
-			text = "I see the project uses Go modules. Let me check the main entry point."
-			toolName = "file_read"
-			filePath = "main.go"
+			text = "I see the project uses Go modules. Let me record a small note."
+			toolName = "file_write"
+			filePath = "mortise-demo.txt"
 		case 3:
 			thinking = "Almost done, let me verify the build..."
 			text = "The project structure looks good. All steps complete."
@@ -110,6 +110,9 @@ func (m *MockProvider) SendPrompt(ctx context.Context, req *ProviderRequest) (<-
 
 		// EventToolCall
 		params := fmt.Sprintf(`{"path":"%s"}`, filePath)
+		if toolName == "file_write" {
+			params = fmt.Sprintf(`{"path":"%s","content":"Mortise demo write\n"}`, filePath)
+		}
 		select {
 		case <-ctx.Done():
 			return

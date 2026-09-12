@@ -75,6 +75,9 @@ func TestMockProvider_MultiTurn_DifferentSequences(t *testing.T) {
 	if len(events2) < 4 {
 		t.Fatalf("turn 2: expected at least 4 events, got %d", len(events2))
 	}
+	if events2[2].ToolName != "file_write" || events2[2].ParametersJSON != `{"path":"mortise-demo.txt","content":"Mortise demo write\n"}` {
+		t.Fatalf("turn 2 tool = %+v, want file_write with demo content", events2[2])
+	}
 
 	// Turn 3 signals completion: no tool call, just thinking, text,
 	// and a usage-carrying EventDone.
