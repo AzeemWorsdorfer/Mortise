@@ -110,6 +110,12 @@ func (b *EventBus) SetLogger(l *slog.Logger) {
 // is closed) so the handler can safely re-subscribe on reconnect.
 func (b *EventBus) Subscribe(clientID string) <-chan *mortisev1.ServerEvent {
 	ch := make(chan *mortisev1.ServerEvent, subscriberBufferSize)
+	b.closeMu.Lock()
+	if b.closed {
+		b.closeMu.Unlock()
+		close(ch)
+		return ch
+	}
 	b.mu.Lock()
 	if old, ok := b.subscribers[clientID]; ok {
 		// Replace: close the old channel so its receiver
@@ -119,6 +125,7 @@ func (b *EventBus) Subscribe(clientID string) <-chan *mortisev1.ServerEvent {
 	}
 	b.subscribers[clientID] = ch
 	b.mu.Unlock()
+	b.closeMu.Unlock()
 	return ch
 }
 

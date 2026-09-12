@@ -71,14 +71,34 @@ func (f *FileDiff) Execute(ctx context.Context, params json.RawMessage) (*ToolRe
 	if err := ctx.Err(); err != nil {
 		return failedResult(err)
 	}
-	var result *ToolResult
 	lockPath := historyLockPath(f.workspaceRoot, p.Path)
+	for attempt := 0; attempt < 8; attempt++ {
+		result, nextLockPath, err := f.executeLockedDiff(p, lockPath)
+		if err != nil {
+			return failedResult(err)
+		}
+		if result != nil {
+			return result, nil
+		}
+		lockPath = nextLockPath
+	}
+	return failedResult(fmt.Errorf("file_diff: target changed during resolution"))
+}
+
+func (f *FileDiff) executeLockedDiff(p filePathParams, lockPath string) (*ToolResult, string, error) {
+	var result *ToolResult
+	nextLockPath := lockPath
 	err := f.history.withFileLock(lockPath, func() error {
 		current, target, displayPath, _, err := readWorkspaceFile(f.workspaceRoot, p.Path, "file_diff", false)
 		if err != nil {
 			return err
 		}
-		previous, previousExists, found := f.history.last(historyTargetPath(f.workspaceRoot, target))
+		actualLockPath := historyTargetPath(f.workspaceRoot, target)
+		if actualLockPath != lockPath {
+			nextLockPath = actualLockPath
+			return nil
+		}
+		previous, previousExists, found := f.history.last(actualLockPath)
 		if !found {
 			previous = ""
 			previousExists = false
@@ -92,10 +112,7 @@ func (f *FileDiff) Execute(ctx context.Context, params json.RawMessage) (*ToolRe
 		}
 		return nil
 	})
-	if err != nil {
-		return failedResult(err)
-	}
-	return result, nil
+	return result, nextLockPath, err
 }
 
 func unifiedDiff(path, oldContent, newContent string, oldExists bool) string {
