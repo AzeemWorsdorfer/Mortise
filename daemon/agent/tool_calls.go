@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	mortisev1 "github.com/AzeemWorsdorfer/Mortise/daemon/gen/mortise/v1"
 	"github.com/AzeemWorsdorfer/Mortise/daemon/tools"
@@ -63,7 +64,7 @@ func (l *AgentLoop) emitToolPending(ctx context.Context, turn int32, ev Provider
 		l.approvalMu.Unlock()
 	}
 
-	l.publish(&mortisev1.ServerEvent{
+	pendingEvent := &mortisev1.ServerEvent{
 		Phase:      mortisev1.AgentPhase_ACTING,
 		TurnNumber: turn,
 		Payload: &mortisev1.ServerEvent_ToolPending{
@@ -78,7 +79,14 @@ func (l *AgentLoop) emitToolPending(ctx context.Context, turn int32, ev Provider
 				Deletions:        int32(deletions),
 			},
 		},
-	})
+	}
+	if requiresApproval {
+		if !l.publishApproval(pendingEvent) {
+			l.resolveApproval(callID, approvalDecision{reason: "approval request could not be delivered"})
+		}
+	} else {
+		l.publish(pendingEvent)
+	}
 	return callID
 }
 
@@ -109,6 +117,18 @@ func (l *AgentLoop) requiresApproval(toolName string) bool {
 	l.approvalMu.Lock()
 	defer l.approvalMu.Unlock()
 	return toolName == "file_write" && l.approvalRules[toolName] == "confirm"
+}
+
+func (l *AgentLoop) publishApproval(event *mortisev1.ServerEvent) bool {
+	publisher, ok := l.bus.(interface {
+		PublishApproval(*mortisev1.ServerEvent) bool
+	})
+	if !ok {
+		l.publish(event)
+		return l.bus != nil
+	}
+	event.TimestampMs = uint64(time.Now().UnixMilli())
+	return publisher.PublishApproval(event)
 }
 
 func (l *AgentLoop) awaitApproval(ctx context.Context, callID string) *tools.ToolResult {

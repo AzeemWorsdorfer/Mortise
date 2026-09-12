@@ -26,6 +26,8 @@ type FileHistory struct {
 	mu         sync.Mutex
 	entries    map[string][]historyEntry
 	maxEntries int
+	locksMu    sync.Mutex
+	locks      map[string]*sync.Mutex
 }
 
 type historyEntry struct {
@@ -59,7 +61,7 @@ func workspaceHistory(root string, stackSize int) *FileHistory {
 		history.mu.Unlock()
 		return history
 	}
-	history := &FileHistory{entries: make(map[string][]historyEntry), maxEntries: stackSize}
+	history := &FileHistory{entries: make(map[string][]historyEntry), maxEntries: stackSize, locks: make(map[string]*sync.Mutex)}
 	actual, loaded := histories.LoadOrStore(key, history)
 	if loaded {
 		return actual.(*FileHistory)
@@ -75,6 +77,30 @@ func historyTargetPath(_ string, target string) string {
 		target = resolved
 	}
 	return filepath.Clean(target)
+}
+
+func historyLockPath(root, requested string) string {
+	target := requested
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(root, target)
+	}
+	return historyTargetPath(root, target)
+}
+
+func (h *FileHistory) withFileLock(path string, fn func() error) error {
+	h.locksMu.Lock()
+	if h.locks == nil {
+		h.locks = make(map[string]*sync.Mutex)
+	}
+	lock, ok := h.locks[path]
+	if !ok {
+		lock = &sync.Mutex{}
+		h.locks[path] = lock
+	}
+	h.locksMu.Unlock()
+	lock.Lock()
+	defer lock.Unlock()
+	return fn()
 }
 
 func (h *FileHistory) push(path, content string, exists bool) {

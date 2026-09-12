@@ -166,6 +166,32 @@ func (b *EventBus) Publish(event *mortisev1.ServerEvent) {
 	}
 }
 
+// PublishApproval delivers an approval event directly to subscribers and
+// reports whether at least one subscriber received it.
+func (b *EventBus) PublishApproval(event *mortisev1.ServerEvent) bool {
+	if event == nil {
+		return false
+	}
+	b.closeMu.Lock()
+	if b.closed {
+		b.closeMu.Unlock()
+		return false
+	}
+	b.closeMu.Unlock()
+
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	delivered := false
+	for _, ch := range b.subscribers {
+		select {
+		case ch <- event:
+			delivered = true
+		default:
+		}
+	}
+	return delivered
+}
+
 // Run is the fan-out loop. It reads events from publishCh,
 // snapshots the current subscriber set under RLock, and delivers
 // each event to every subscriber with a non-blocking send. The

@@ -99,11 +99,25 @@ func (f *FileWrite) Execute(ctx context.Context, params json.RawMessage) (*ToolR
 		return failedResult(err)
 	}
 
-	target, displayPath, previous, exists, err := writeWorkspaceFile(f.workspaceRoot, p.Path, *p.Content)
+	var (
+		target      string
+		displayPath string
+		previous    string
+		exists      bool
+	)
+	lockPath := historyLockPath(f.workspaceRoot, p.Path)
+	err := f.history.withFileLock(lockPath, func() error {
+		var err error
+		target, displayPath, previous, exists, err = writeWorkspaceFile(f.workspaceRoot, p.Path, *p.Content)
+		if err != nil {
+			return err
+		}
+		f.history.push(historyTargetPath(f.workspaceRoot, target), previous, exists)
+		return nil
+	})
 	if err != nil {
 		return failedResult(err)
 	}
-	f.history.push(historyTargetPath(f.workspaceRoot, target), previous, exists)
 	diff := unifiedDiff(displayPath, previous, *p.Content, exists)
 	additions, deletions := diffStats(previous, *p.Content)
 	return &ToolResult{
