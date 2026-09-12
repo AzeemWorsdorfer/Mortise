@@ -265,7 +265,10 @@ type workspaceParentOptions struct {
 }
 
 type workspaceIdentity struct {
-	device int32
+	// device and inode identify a directory across a resolution pass.
+	// device is uint64 because Stat_t.Dev is unsigned on Linux and
+	// signed on darwin; uint64(stat.Dev) is lossless on both.
+	device uint64
 	inode  uint64
 }
 
@@ -450,7 +453,7 @@ func workspaceIdentityForPath(path string) (workspaceIdentity, error) {
 	if err := unix.Stat(path, &stat); err != nil {
 		return workspaceIdentity{}, err
 	}
-	return workspaceIdentity{device: stat.Dev, inode: stat.Ino}, nil
+	return workspaceIdentity{device: uint64(stat.Dev), inode: stat.Ino}, nil
 }
 
 func verifyWorkspacePathIdentity(path string, expected workspaceIdentity) error {
@@ -469,7 +472,7 @@ func workspaceIdentityForDescriptor(fd int) (workspaceIdentity, error) {
 	if err := unix.Fstat(fd, &stat); err != nil {
 		return workspaceIdentity{}, err
 	}
-	return workspaceIdentity{device: stat.Dev, inode: stat.Ino}, nil
+	return workspaceIdentity{device: uint64(stat.Dev), inode: stat.Ino}, nil
 }
 
 func verifyWorkspaceIdentity(fd int, expected workspaceIdentity) error {
